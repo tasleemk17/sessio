@@ -1,0 +1,26 @@
+# Render Blueprint for the API. The website goes to Vercel, the database to Neon: see docs/DEPLOY.md.
+# Render reads this file when you choose New > Blueprint and point it at this repository.
+services:
+  - type: web
+    name: sessio-api
+    runtime: docker
+    plan: free
+    region: singapore          # closest to India; cannot be changed after creation
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: JWT_SECRET
+        generateValue: true     # Render makes a long random value, so you never type one
+      # Asked for once, when the Blueprint is created. They are never stored in Git.
+      - key: DATABASE_URL       # the Neon connection string
+        sync: false
+      - key: CORS_ORIGINS       # your Vercel address, for example https://sessio.vercel.app
+        sync: false
+      - key: RAZORPAY_KEY_ID    # optional: leave empty for demo payments
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
