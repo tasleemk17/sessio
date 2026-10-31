@@ -23,6 +23,8 @@ ORDERS_URL = "https://api.razorpay.com/v1/orders"
 
 def create_order(amount_paise: int, receipt: str) -> dict:
     """Returns {"mode", "order_id", "key_id"}. key_id is the public key, safe to send to the browser."""
+    if config.payment_mode() == "off":
+        raise HTTPException(503, "Payments are not switched on for this site")
     if config.payment_mode() == "mock":
         return {"mode": "mock", "order_id": f"mock_{uuid.uuid4().hex[:16]}", "key_id": None}
     try:
@@ -52,3 +54,12 @@ def verify(order_id: str, payment_id: str | None, signature: str | None) -> bool
     if config.payment_mode() != "razorpay" or not payment_id or not signature:
         return False
     return hmac.compare_digest(signature_for(order_id, payment_id, config.RAZORPAY_KEY_SECRET), signature)
+
+
+def verify_webhook(raw_body: bytes, signature: str | None) -> bool:
+    """Razorpay signs the exact bytes it sends with HMAC-SHA256 and the webhook secret. The raw body is checked, not
+    a re-encoded copy of the JSON, because any difference in spacing would change the signature."""
+    if not config.RAZORPAY_WEBHOOK_SECRET or not signature:
+        return False
+    expected = hmac.new(config.RAZORPAY_WEBHOOK_SECRET.encode(), raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)

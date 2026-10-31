@@ -89,7 +89,7 @@ def test_upload_rules(client, monkeypatch):
     assert upload(client, headers, doc["id"], data=b"").status_code == 422
     assert upload(client, headers, call["id"]).status_code == 422  # a call has no file
     monkeypatch.setattr(config, "MAX_FILE_MB", 1)
-    assert upload(client, headers, doc["id"], data=b"x" * (1024 * 1024 + 1)).status_code == 413
+    assert upload(client, headers, doc["id"], data=PDF + b"x" * (1024 * 1024 + 1)).status_code == 413
     assert upload(client, new_expert(client)[0], doc["id"]).status_code == 404  # not their service
 
 
@@ -98,7 +98,7 @@ def test_file_names_are_cleaned(client):
     doc = add_service(client, headers, kind="document", title="Guide", price_rupees=50, duration_min=None)
     res = upload(client, headers, doc["id"], name="../../etc/<script>passwd.pdf")
     assert res.status_code == 200 and "/" not in res.json()["file_name"] and "<" not in res.json()["file_name"]
-    assert upload(client, headers, doc["id"], name="v2.pdf", data=b"newer").json()["file_name"] == "v2.pdf"  # replaced, not added
+    assert upload(client, headers, doc["id"], name="v2.pdf", data=PDF + b" newer").json()["file_name"] == "v2.pdf"  # replaced, not added
 
 
 # ------------------------------------------------------------------ priority DMs

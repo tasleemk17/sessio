@@ -8,6 +8,10 @@ _dir = tempfile.mkdtemp()
 os.environ["DATABASE_URL"] = os.environ.get("TEST_DATABASE_URL") or f"sqlite:///{_dir}/test.db"
 os.environ["RAZORPAY_KEY_ID"] = ""
 os.environ["RAZORPAY_KEY_SECRET"] = ""
+os.environ["RAZORPAY_WEBHOOK_SECRET"] = ""
+os.environ["PBKDF2_ITERATIONS"] = "1000"  # real value is 600000; tests only need the same code path, quickly
+os.environ["RATE_LIMITS_ENABLED"] = "false"  # tests that need limits turn them on themselves
+os.environ["ENVIRONMENT"] = "development"
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

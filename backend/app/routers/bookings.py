@@ -1,13 +1,15 @@
+import json
+import logging
 import secrets
 from datetime import timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .. import config, payments, slots
+from .. import config, payments, ratelimit, slots
 from ..db import get_db
 from ..models import Booking, Expert, Service, ServiceFile, User, utcnow
 from ..schemas import BookingCreated, BookingIn, BookingOut, PayIn, PaymentInfo
@@ -16,6 +18,7 @@ from ..views import bookings_out
 from .experts import file_response
 
 router = APIRouter(tags=["bookings"])
+log = logging.getLogger("sessio.bookings")
 
 
 def _mark_paid(booking: Booking, payment_id: str | None = None) -> None:
@@ -41,7 +44,12 @@ def create_booking(body: BookingIn, user: User = Depends(current_user), db: Sess
     if service.expert_id == user.id:
         raise HTTPException(400, "You cannot book your own service")
     expert = db.get(Expert, service.expert_id)
+    ratelimit.BOOKING.check(f"u{user.id}")
     slots.expire_stale_holds(db)
+    # Without a cap, one person could hold every free time of an expert by never paying
+    holds = db.scalar(select(func.count()).select_from(Booking).where(Booking.seeker_id == user.id, Booking.status == "pending"))
+    if holds >= config.MAX_PENDING_HOLDS:
+        raise HTTPException(429, "You have bookings waiting for payment. Finish or cancel them first.")
 
     start = end = lock = None
     note = body.note.strip()
@@ -93,6 +101,20 @@ def create_booking(body: BookingIn, user: User = Depends(current_user), db: Sess
     return BookingCreated(booking=bookings_out(db, [booking])[0], payment=payment)
 
 
+def _settle(db: Session, booking: Booking, payment_id: str | None) -> None:
+    """Marks a genuinely paid booking as paid. Shared by the buyer's browser and Razorpay's own webhook, so both
+    end the same way, and doing it twice changes nothing. Raises IntegrityError when the slot was taken meanwhile."""
+    if booking.status == "paid":
+        return
+    if booking.status == "expired" and booking.slot_start is not None:
+        # The hold ran out while the person was paying. Take the slot back if nobody else has it.
+        expert = db.get(Expert, booking.expert_id)
+        booking.slot_lock = f"{expert.user_id}:{booking.slot_start:%Y%m%d%H%M}"
+        db.flush()
+    _mark_paid(booking, payment_id)
+    db.commit()
+
+
 @router.post("/api/bookings/{booking_id}/pay", response_model=BookingOut)
 def confirm_payment(booking_id: int, body: PayIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
     booking = _own_booking(db, user, booking_id)
@@ -102,18 +124,44 @@ def confirm_payment(booking_id: int, body: PayIn, user: User = Depends(current_u
         raise HTTPException(409, "This booking can no longer be paid")
     if not payments.verify(booking.payment_order_id, body.razorpay_payment_id, body.razorpay_signature):
         raise HTTPException(400, "The payment could not be verified")
-    if booking.status == "expired" and booking.slot_start is not None:
-        # The hold ran out while the person was paying. Take the slot back if nobody else has it.
-        expert = db.get(Expert, booking.expert_id)
-        booking.slot_lock = f"{expert.user_id}:{booking.slot_start:%Y%m%d%H%M}"
-        try:
-            db.flush()
-        except IntegrityError:
-            db.rollback()
-            raise HTTPException(409, "Your payment went through but the time was taken meanwhile. Contact support with your booking number.")
-    _mark_paid(booking, body.razorpay_payment_id)
-    db.commit()
+    try:
+        _settle(db, booking, body.razorpay_payment_id)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "Your payment went through but the time was taken meanwhile. Contact support with your booking number.")
     return bookings_out(db, [booking])[0]
+
+
+@router.post("/api/payments/webhook", include_in_schema=False)
+async def razorpay_webhook(request: Request, db: Session = Depends(get_db)):
+    """Razorpay tells the server a payment succeeded, even when the buyer closed the tab before the browser could.
+    Nothing in the body is trusted until the signature over the raw bytes checks out."""
+    raw = await request.body()
+    if not payments.verify_webhook(raw, request.headers.get("x-razorpay-signature")):
+        log.warning("Webhook with a bad signature from %s", ratelimit.client_ip(request))
+        raise HTTPException(400, "Invalid signature")
+    try:
+        event = json.loads(raw)
+        if event.get("event") not in {"payment.captured", "order.paid"}:
+            return {"ok": True}
+        payment = event["payload"]["payment"]["entity"]
+        order_id, payment_id = payment["order_id"], payment["id"]
+        amount, currency = int(payment["amount"]), payment["currency"]
+    except (ValueError, KeyError, TypeError):
+        return {"ok": True}  # a shape we do not use; answering 200 stops Razorpay from retrying it
+    booking = db.scalar(select(Booking).where(Booking.payment_order_id == order_id))
+    if booking is None or booking.status == "paid":
+        return {"ok": True}
+    # The amount actually paid must match what this booking costs, whatever the order said
+    if amount != booking.amount_paise or currency != "INR":
+        log.error("Webhook amount mismatch for booking %s", booking.id)
+        return {"ok": True}
+    try:
+        _settle(db, booking, payment_id)
+    except IntegrityError:
+        db.rollback()
+        log.error("Booking %s was paid but its time was taken: refund needed", booking.id)
+    return {"ok": True}
 
 
 @router.post("/api/bookings/{booking_id}/cancel", response_model=BookingOut)

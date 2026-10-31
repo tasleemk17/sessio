@@ -19,7 +19,7 @@ export default function Login() {
 
   // Only paths on this site are accepted as the place to return to, never another address
   const next = params.get("next");
-  const target = next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
+  const target = next && next.startsWith("/") && !next.startsWith("//") && !next.includes("\\") ? next : "/dashboard";
   if (signedIn) return <Navigate to={target} replace />;
 
   async function onSubmit(e: FormEvent) {
@@ -73,7 +73,7 @@ export default function Login() {
             {show ? <EyeOff size={16} /> : <Eye size={16} />}
           </button>
         </div>
-        {mode === "register" && <p className="mt-1.5 text-xs text-slate-500">At least 8 characters.</p>}
+        {mode === "register" && <p className="mt-1.5 text-xs text-slate-500">At least 10 characters. A short sentence works well.</p>}
 
         {waking && (
           <p role="status" className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-warn">

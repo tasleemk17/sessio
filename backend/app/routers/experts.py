@@ -7,7 +7,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .. import config, slots
+from .. import config, ratelimit, slots, uploads
 from ..db import get_db
 from ..models import Availability, Booking, Expert, Service, ServiceFile, User, utcnow
 from ..schemas import (
@@ -19,13 +19,12 @@ from ..views import bookings_out, services_out
 public = APIRouter(prefix="/api/experts", tags=["experts"])
 manage = APIRouter(prefix="/api/expert", tags=["expert"])
 
-ALLOWED_FILES = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".md", ".png", ".jpg", ".jpeg", ".zip"}
-
+ALLOWED_FILES = uploads.ALLOWED
 
 # ---------------------------------------------------------------- public pages
 
 @public.get("", response_model=list[ExpertCard])
-def explore(q: str = "", db: Session = Depends(get_db)):
+def explore(q: str = Query("", max_length=80), db: Session = Depends(get_db)):
     """Experts who have at least one active service, newest first."""
     stmt = (
         select(Expert, User.name, func.min(Service.price_paise), func.count(Service.id))
@@ -37,8 +36,10 @@ def explore(q: str = "", db: Session = Depends(get_db)):
         .limit(60)
     )
     if q.strip():
-        like = f"%{q.strip()}%"
-        stmt = stmt.where(or_(User.name.ilike(like), Expert.handle.ilike(like), Expert.headline.ilike(like), Expert.bio.ilike(like)))
+        # % and _ typed by the visitor are plain characters, not wildcards that make the database scan everything
+        escaped = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{escaped}%"
+        stmt = stmt.where(or_(*(col.ilike(like, escape="\\") for col in (User.name, Expert.handle, Expert.headline, Expert.bio))))
     return [
         ExpertCard(handle=e.handle, name=name, headline=e.headline, from_paise=cheapest, services=count)
         for e, name, cheapest, count in db.execute(stmt).all()
@@ -127,6 +128,9 @@ def my_services(expert: Expert = Depends(current_expert), db: Session = Depends(
 
 @manage.post("/services", response_model=ServiceOut, status_code=201)
 def add_service(body: ServiceIn, expert: Expert = Depends(current_expert), db: Session = Depends(get_db)):
+    ratelimit.WRITE.check(f"u{expert.user_id}")
+    if db.scalar(select(func.count()).select_from(Service).where(Service.expert_id == expert.user_id)) >= config.MAX_SERVICES:
+        raise HTTPException(409, f"You can have up to {config.MAX_SERVICES} services")
     service = Service(expert_id=expert.user_id, **_check_service(body))
     db.add(service)
     db.commit()
@@ -168,6 +172,7 @@ async def upload_file(
     expert: Expert = Depends(current_expert),
     db: Session = Depends(get_db),
 ):
+    ratelimit.UPLOAD.check(f"u{expert.user_id}")
     service = _own_service(db, expert, service_id)
     if service.kind != "document":
         raise HTTPException(422, "Only a document service has a file")
@@ -183,6 +188,8 @@ async def upload_file(
         raise HTTPException(413, f"The file is larger than {config.MAX_FILE_MB} MB")
     if not data:
         raise HTTPException(422, "The file is empty")
+    if not uploads.content_matches(extension, data):
+        raise HTTPException(415, f"This does not look like a real {extension} file")
     row = db.get(ServiceFile, service.id)
     if row:
         row.filename, row.size, row.data = name, len(data), data

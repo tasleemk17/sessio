@@ -1,19 +1,27 @@
-from fastapi import APIRouter, Depends, HTTPException
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from .. import config, ratelimit
 from ..db import get_db
 from ..models import Expert, User
 from ..schemas import Login, MeOut, Register, TokenOut
-from ..security import create_token, current_user, hash_password, verify_password
+from ..security import create_token, current_user, hash_password, needs_rehash, spend_time_like_a_login, verify_password
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+log = logging.getLogger("sessio.auth")  # events only: never a password, a token or a full email
 
 
 @router.post("/register", response_model=TokenOut, status_code=201)
-def register(body: Register, db: Session = Depends(get_db)):
-    user = User(email=body.email.strip().lower(), name=body.name.strip(), password_hash=hash_password(body.password))
+def register(body: Register, request: Request, db: Session = Depends(get_db)):
+    ratelimit.REGISTER.check(ratelimit.client_ip(request))
+    email = body.email.strip().lower()
+    if body.password.lower() == email or email.split("@")[0] in body.password.lower() and len(email.split("@")[0]) >= 4:
+        raise HTTPException(422, "The password must not contain your email")
+    user = User(email=email, name=body.name.strip(), password_hash=hash_password(body.password))
     db.add(user)
     try:
         db.commit()
@@ -24,11 +32,34 @@ def register(body: Register, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=TokenOut)
-def login(body: Login, db: Session = Depends(get_db)):
-    user = db.scalar(select(User).where(User.email == body.email.strip().lower()))
+def login(body: Login, request: Request, db: Session = Depends(get_db)):
+    ip = ratelimit.client_ip(request)
+    ratelimit.LOGIN_IP.check(ip)
+    email = body.email.strip().lower()
+    # Failed tries are counted per email AND address, so a stranger cannot lock somebody else out of their account
+    account_key = f"{email}|{ip}"
+    wait = ratelimit.LOGIN_ACCOUNT.retry_after(account_key) if config.RATE_LIMITS_ENABLED else 0
+    if wait:
+        log.warning("Login blocked for repeated failures from %s", ip)
+        raise HTTPException(429, "Too many wrong passwords. Try again in a few minutes.", headers={"Retry-After": str(wait)})
+
+    user = db.scalar(select(User).where(User.email == email))
+    if user is None:
+        spend_time_like_a_login(body.password)
+        ok = False
+    else:
+        ok = verify_password(body.password, user.password_hash)
     # One message for "no such user" and "wrong password", so emails cannot be probed
-    if user is None or not verify_password(body.password, user.password_hash):
+    if not ok:
+        if config.RATE_LIMITS_ENABLED:
+            ratelimit.LOGIN_ACCOUNT.hit(account_key)
+        log.info("Failed login from %s", ip)
         raise HTTPException(401, "Wrong email or password")
+
+    ratelimit.LOGIN_ACCOUNT.clear(account_key)
+    if needs_rehash(user.password_hash):  # upgrade an older hash now that the real password is in hand
+        user.password_hash = hash_password(body.password)
+        db.commit()
     return TokenOut(token=create_token(user.id))
 
 

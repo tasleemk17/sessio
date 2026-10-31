@@ -9,12 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
     <title>Sessio</title>
-    <script>
-      // Apply the saved theme before the first paint so a dark-mode user never sees a white flash
-      try {
-        if (localStorage.getItem("sessio.theme") === "dark") document.documentElement.classList.add("dark");
-      } catch (e) {}
-    </script>
+    <script src="/theme-init.js"></script>
   </head>
   <body>
     <div id="root"></div>

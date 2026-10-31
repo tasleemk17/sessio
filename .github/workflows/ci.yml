@@ -20,6 +20,8 @@ jobs:
           cache-dependency-path: backend/requirements-dev.txt
       - run: pip install -r requirements-dev.txt
       - run: pytest -q
+      - name: Known-vulnerability scan of Python dependencies
+        run: pip install pip-audit && pip-audit -r requirements.txt
 
   frontend:
     runs-on: ubuntu-latest
@@ -35,3 +37,5 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npm run build
+      - name: Known-vulnerability scan of npm dependencies (shipped code)
+        run: npm audit --omit=dev --audit-level=high

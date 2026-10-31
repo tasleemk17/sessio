@@ -12,10 +12,24 @@ RESERVED = {"admin", "api", "login", "register", "expert", "experts", "dashboard
 Kind = Literal["call", "document", "dm"]
 
 
+# The passwords people reach for first. A short list stops the worst; length does the rest.
+COMMON_PASSWORDS = {
+    "password", "password1", "password123", "passw0rd", "123456789", "1234567890", "12345678910", "qwertyuiop", "qwerty123",
+    "iloveyou123", "welcome123", "admin12345", "letmein123", "abcd123456", "india123456", "sessio12345", "1q2w3e4r5t",
+}
+
+
 class Register(BaseModel):
     name: str = Field(min_length=2, max_length=80)
     email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=254)
-    password: str = Field(min_length=8, max_length=128)
+    password: str = Field(min_length=10, max_length=128)
+
+    @field_validator("password")
+    @classmethod
+    def _not_guessable(cls, value: str) -> str:
+        if value.lower() in COMMON_PASSWORDS or len(set(value)) < 5:
+            raise ValueError("That password is too easy to guess. Try a longer phrase.")
+        return value
 
 
 class Login(BaseModel):

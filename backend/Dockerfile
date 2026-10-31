@@ -18,4 +18,4 @@ ENV PORT=8000
 EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=3s --retries=5 \
   CMD python -c "import os, urllib.request as u; u.urlopen('http://localhost:%s/api/health' % os.environ.get('PORT', '8000'))"
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "uvicorn app.main:app --no-server-header --host 0.0.0.0 --port ${PORT:-8000}"]

@@ -34,7 +34,8 @@ Decisions worth reading:
 - **Money in paise** (integers), never floats.
 - **Payments verified on the server.** The server creates the Razorpay order; the browser opens Checkout with only the public key; the server checks the HMAC-SHA256 signature of `order_id|payment_id` with the secret before confirming. Without keys the same flow runs in demo mode.
 - **Safe downloads.** Files are served as attachments with `application/octet-stream` and `nosniff`, only to the buyer who paid and to the seller. Uploads need a seller declaration (own the file, no one else's personal contact details).
-- **Tests.** 46 tests cover accounts, slot maths, double booking, holds, documents, DMs and payment verification. They also pass on Postgres (`TEST_DATABASE_URL`).
+- **Security is built in, not added on.** Strong password hashing, brute-force lockout, forged-token rejection, content-checked uploads, CSP and other headers, strict CORS, a signed Razorpay webhook, and a production mode that refuses to start with unsafe settings. Everything is listed, with the test that proves it, in [docs/SECURITY.md](docs/SECURITY.md).
+- **Tests.** 68 tests cover accounts, slot maths, double booking, holds, documents, DMs, payment verification and the security rules. They also pass on Postgres (`TEST_DATABASE_URL`).
 
 ## Run it
 
@@ -53,7 +54,7 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5190. With no keys set, payments use the demo button.
+Open http://localhost:5190. With no keys set, payments use the demo button (laptop only: on a public site it would let anyone book for free, so production refuses it unless you switch it on on purpose).
 
 ### Real Razorpay (test mode)
 
@@ -65,6 +66,8 @@ RAZORPAY_KEY_SECRET=...
 ```
 
 Restart the API. Booking now opens the Razorpay window; use Razorpay's published test cards. Keep the secret out of Git: `.env` is ignored.
+
+For payments to be confirmed even when the buyer closes the tab, add the webhook described in [docs/SECURITY.md](docs/SECURITY.md#setting-up-the-razorpay-webhook-recommended-for-any-real-use).
 
 ### Docker
 
@@ -89,6 +92,6 @@ Vercel (site) + Render (API) + Neon (Postgres): see [docs/DEPLOY.md](docs/DEPLOY
 ## Scope and honest limits
 
 - Test-mode payments only; nothing is paid out to experts. The 10% platform fee is shown in earnings for demonstration.
-- No refunds or buyer cancellation of paid bookings yet; Razorpay webhooks are the next step so a payment is confirmed even if the browser closes mid-payment.
+- No refunds or buyer cancellation of paid bookings yet. No email verification, password reset or two-factor sign-in (see the limits in [docs/SECURITY.md](docs/SECURITY.md)).
 - Files are stored in the database (limit 5 MB each), fine for a demo; a real product would use object storage.
 - Sessio does not list or sell anyone's personal phone numbers or contact details, and uploads that do are against the seller declaration.
