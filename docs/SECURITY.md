@@ -14,6 +14,9 @@ What Sessio protects, how, and what it does not do yet. It handles accounts, boo
 | Paying nothing | Payment is confirmed only after the server verifies Razorpay's HMAC signature with the secret key. Amounts come from the server, never the browser. A "demo payment" mode exists for laptops but **production refuses to start with it on unless `ALLOW_MOCK_PAYMENTS=true` is set on purpose**. | `test_a_site_without_payments...`, `test_browser_confirmation_needs_a_valid_signature` |
 | Browser closed mid-payment | Razorpay's webhook confirms the payment from their side. The signature is checked over the raw bytes, the paid amount must equal the booking price, and repeats change nothing. | `test_webhook_*` |
 | Double booking | A unique database constraint on the call slot, not just a check in code. | `test_bookings.py` |
+| Overselling a webinar or a package | Seats and the last package credit are counted under a row lock. A webinar's price, dates and length are frozen once someone has bought it. A package belongs to the buyer and to one call. Credits expire. | `test_webinar_seats_are_limited...`, `test_credits_*`, `test_a_package_belongs_to_one_buyer...` |
+| Getting memberships for free | A membership is only active after Razorpay's signature (checked as `payment_id\|subscription_id`, the opposite order from a one-off payment) or a signed webhook charge of exactly the right amount. Members only get documents while the paid month lasts; strangers get 404. | `test_a_real_subscription_needs_razorpays_signature`, `test_a_member_gets_the_documents...` |
+| A stolen session | Changing the password signs every older session out, and needs the current password (counted against the same lockout). | `test_changing_the_password_signs_other_sessions_out` |
 | Hoarding every time slot | One person can hold at most 3 unpaid bookings; holds expire after 15 minutes. | `test_one_person_cannot_hold_every_time` |
 | Reading someone else's data | Every booking, file and message is looked up by owner. Other people's rows answer 404, so their existence is not confirmed. | `test_nobody_can_touch_someone_elses_booking` |
 | Malicious uploads | Allow-list of extensions, 5 MB cap, the first bytes must match the claimed type, programs (`MZ`, ELF, `#!`) are refused, names are sanitised. Files are served only as `application/octet-stream` attachments with `nosniff`, so a file can never run as a web page. The seller must declare they own it and that it holds nobody's personal contact details. | `test_a_program_cannot_hide...` |
@@ -29,7 +32,7 @@ What Sessio protects, how, and what it does not do yet. It handles accounts, boo
 1. Razorpay dashboard (Test Mode) > Settings > Webhooks > Add new webhook.
 2. URL: `https://<your-api>/api/payments/webhook`
 3. Secret: make up a long random one and set it as `RAZORPAY_WEBHOOK_SECRET` on the server.
-4. Events: `payment.captured` and `order.paid`.
+4. Events: `payment.captured`, `order.paid`, `subscription.activated`, `subscription.charged`, `subscription.cancelled`, `subscription.completed`, `subscription.halted`.
 
 ## Known limits (honest list)
 
@@ -38,6 +41,7 @@ What Sessio protects, how, and what it does not do yet. It handles accounts, boo
 - **No email verification, password reset, or two-factor sign-in.** Without email delivery there is no safe way to recover an account yet, so none is offered rather than a weak one.
 - **No refunds or buyer cancellation of paid bookings,** and no payouts to experts. Money in this project is test money.
 - **Files are not scanned for malware** and are stored in the database. They are only ever offered as downloads, but a buyer should still treat a downloaded file as untrusted. Real products use object storage and a scanner.
+- **Real Razorpay subscriptions were not run against Razorpay's servers.** The signature maths, webhook handling and cancelling are tested with a fake network layer, and follow Razorpay's documentation. Try one in test mode before relying on it.
 - **Video rooms (Jitsi) are protected only by an unguessable name** (48 random bits). Anyone with the link can join.
 - **Sign-up reveals whether an email is taken** (it must, to tell the person). It is rate limited.
 

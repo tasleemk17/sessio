@@ -6,7 +6,24 @@ export const rupees = (paise: number): string => (paise === 0 ? "Free" : `₹${(
 /** For earnings and totals, where zero is an amount, not "free". */
 export const amount = (paise: number): string => `₹${(paise / 100).toLocaleString("en-IN")}`;
 
-export const KIND_LABEL: Record<Kind, string> = { call: "1:1 call", document: "Document", dm: "Priority DM" };
+export const KIND_LABEL: Record<Kind, string> = {
+  call: "1:1 call", document: "Document", dm: "Priority DM", webinar: "Webinar", package: "Package", membership: "Membership",
+};
+
+export const CATEGORY_LABEL: Record<string, string> = {
+  career: "Career guidance", tech: "Tech and engineering", interview: "Interview preparation", finance: "Finance and money",
+  design: "Design", marketing: "Marketing and growth", health: "Health and fitness", education: "Education and study", other: "Other",
+};
+
+export const dateOnly = (iso: string): string => new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+
+/** The value an <input type="datetime-local"> wants, from a UTC time, in the viewer's own zone. */
+export const toLocalInput = (iso: string): string => {
+  const d = new Date(iso);
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 16);
+};
+export const fromLocalInput = (value: string): string => new Date(value).toISOString();
 
 /** Times arrive in UTC and are shown in the viewer's own time zone. */
 export const dateTime = (iso: string): string =>

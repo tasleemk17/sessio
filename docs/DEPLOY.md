@@ -23,7 +23,7 @@ The free plan sleeps when idle, so the first request after a pause takes about a
 
 ### Razorpay webhook (so paid bookings are never lost)
 
-In the Razorpay dashboard (Test Mode) > Settings > Webhooks, add `https://<your-service>.onrender.com/api/payments/webhook`, the same secret as `RAZORPAY_WEBHOOK_SECRET`, and the events `payment.captured` and `order.paid`.
+In the Razorpay dashboard (Test Mode) > Settings > Webhooks, add `https://<your-service>.onrender.com/api/payments/webhook`, the same secret as `RAZORPAY_WEBHOOK_SECRET`, and the events `payment.captured`, `order.paid`, `subscription.activated`, `subscription.charged`, `subscription.cancelled`, `subscription.completed` and `subscription.halted`.
 
 ## 3. Vercel: the website
 

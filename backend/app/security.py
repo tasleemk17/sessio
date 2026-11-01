@@ -1,3 +1,4 @@
+import calendar
 import hashlib
 import hmac
 import os
@@ -78,6 +79,9 @@ def current_user(
         raise HTTPException(401, "Session expired, please sign in again")
     if user is None:
         raise HTTPException(401, "Account not found")
+    # Changing the password signs every older session out, so a stolen token stops working
+    if user.password_changed_at is not None and int(payload.get("iat", 0)) < calendar.timegm(user.password_changed_at.timetuple()):
+        raise HTTPException(401, "Your password changed, please sign in again")
     return user
 
 

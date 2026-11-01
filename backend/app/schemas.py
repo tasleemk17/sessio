@@ -8,8 +8,9 @@ from pydantic import BaseModel, Field, PlainSerializer, field_validator
 UtcTime = Annotated[datetime, PlainSerializer(lambda d: d.isoformat() + "Z", return_type=str)]
 
 HANDLE = re.compile(r"^[a-z0-9][a-z0-9-]{2,29}$")
-RESERVED = {"admin", "api", "login", "register", "expert", "experts", "dashboard", "me", "e", "explore", "settings", "about", "help", "sessio"}
-Kind = Literal["call", "document", "dm"]
+RESERVED = {"admin", "api", "login", "register", "expert", "experts", "dashboard", "me", "e", "explore", "settings", "about", "help", "sessio", "categories"}
+Kind = Literal["call", "document", "dm", "webinar", "package", "membership"]
+CategoryName = Literal["career", "tech", "interview", "finance", "design", "marketing", "health", "education", "other"]
 
 
 # The passwords people reach for first. A short list stops the worst; length does the rest.
@@ -27,9 +28,27 @@ class Register(BaseModel):
     @field_validator("password")
     @classmethod
     def _not_guessable(cls, value: str) -> str:
-        if value.lower() in COMMON_PASSWORDS or len(set(value)) < 5:
-            raise ValueError("That password is too easy to guess. Try a longer phrase.")
-        return value
+        return check_password_strength(value)
+
+
+def check_password_strength(value: str) -> str:
+    if value.lower() in COMMON_PASSWORDS or len(set(value)) < 5:
+        raise ValueError("That password is too easy to guess. Try a longer phrase.")
+    return value
+
+
+class PasswordChange(BaseModel):
+    current_password: str = Field(max_length=128)
+    new_password: str = Field(min_length=10, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def _not_guessable(cls, value: str) -> str:
+        return check_password_strength(value)
+
+
+class ProfileUpdate(BaseModel):
+    name: str = Field(min_length=2, max_length=80)
 
 
 class Login(BaseModel):
@@ -53,6 +72,7 @@ class ExpertIn(BaseModel):
     headline: str = Field(default="", max_length=120)
     bio: str = Field(default="", max_length=2000)
     timezone: str = "Asia/Kolkata"
+    category: CategoryName = "other"
 
     @field_validator("handle")
     @classmethod
@@ -67,6 +87,7 @@ class ExpertUpdate(BaseModel):
     headline: str = Field(default="", max_length=120)
     bio: str = Field(default="", max_length=2000)
     timezone: str = "Asia/Kolkata"
+    category: CategoryName = "other"
 
 
 class ServiceIn(BaseModel):
@@ -77,6 +98,11 @@ class ServiceIn(BaseModel):
     duration_min: int | None = Field(default=None, ge=10, le=240)
     reply_hours: int | None = Field(default=None, ge=1, le=168)
     is_active: bool = True
+    capacity: int | None = Field(default=None, ge=1, le=500)  # webinar seats
+    sessions: list[datetime] = Field(default_factory=list, max_length=12)  # webinar dates (UTC); several make a cohort
+    call_service_id: int | None = None  # package: the call it is a bundle of
+    credits: int | None = Field(default=None, ge=2, le=20)
+    valid_days: int | None = Field(default=None, ge=7, le=365)
 
 
 class ServiceOut(BaseModel):
@@ -90,6 +116,14 @@ class ServiceOut(BaseModel):
     is_active: bool
     file_name: str | None = None
     file_size: int | None = None
+    capacity: int | None = None
+    spots_left: int | None = None
+    sessions: list[UtcTime] = []
+    call_service_id: int | None = None
+    call_service_title: str | None = None
+    credits: int | None = None
+    valid_days: int | None = None
+    documents_included: int | None = None  # membership: how many documents it unlocks
 
 
 class ExpertPublic(BaseModel):
@@ -98,6 +132,7 @@ class ExpertPublic(BaseModel):
     headline: str
     bio: str
     timezone: str
+    category: str = "other"
     services: list[ServiceOut]
 
 
@@ -105,6 +140,7 @@ class ExpertCard(BaseModel):
     handle: str
     name: str
     headline: str
+    category: str = "other"
     from_paise: int | None
     services: int
 
@@ -124,6 +160,7 @@ class SlotsOut(BaseModel):
 class BookingIn(BaseModel):
     service_id: int
     slot_start: datetime | None = None  # UTC, for calls
+    package_booking_id: int | None = None  # pay for a call with a credit from a package the person already bought
     note: str = Field(default="", max_length=2000)
 
 
@@ -156,6 +193,14 @@ class BookingOut(BaseModel):
     has_file: bool = False
     file_name: str | None = None
     file_size: int | None = None
+    service_id: int = 0
+    reference: str = ""
+    sessions: list[UtcTime] = []  # webinars and cohorts
+    package_total: int | None = None
+    package_used: int | None = None
+    package_call_service_id: int | None = None
+    valid_until: UtcTime | None = None
+    via_package: bool = False
 
 
 class PaymentInfo(BaseModel):
@@ -180,3 +225,68 @@ class Summary(BaseModel):
     by_kind: dict[str, int]
     pending_dms: int
     upcoming_calls: int
+
+
+class SubscriptionIn(BaseModel):
+    service_id: int
+
+
+class SubscriptionOut(BaseModel):
+    id: int
+    status: str  # pending | active | cancelling | cancelled | expired
+    service_id: int
+    service_title: str
+    expert_name: str
+    expert_handle: str
+    amount_paise: int
+    payments: int
+    created_at: UtcTime
+    current_period_end: UtcTime | None
+    cancel_at_period_end: bool
+    has_access: bool
+    documents_included: int
+
+
+class SubscriptionPayment(BaseModel):
+    mode: Literal["razorpay", "mock"]
+    subscription_id: str
+    key_id: str | None
+    amount_paise: int
+    currency: str = "INR"
+
+
+class SubscriptionCreated(BaseModel):
+    subscription: SubscriptionOut
+    payment: SubscriptionPayment
+
+
+class CategoryOut(BaseModel):
+    key: str
+    label: str
+    experts: int
+
+
+class RewardLine(BaseModel):
+    title: str
+    points: int
+    at: UtcTime
+
+
+class RewardsOut(BaseModel):
+    points: int
+    spent_paise: int
+    tier: str
+    next_tier: str | None
+    points_to_next: int | None
+    recent: list[RewardLine]
+
+
+class HomeOut(BaseModel):
+    name: str
+    upcoming_calls: int
+    upcoming_webinars: int
+    documents: int
+    pending_replies: int
+    active_memberships: int
+    active_packages: int
+    next_session: BookingOut | None

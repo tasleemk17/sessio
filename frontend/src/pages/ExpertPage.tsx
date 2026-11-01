@@ -1,19 +1,26 @@
 import { useQuery } from "@tanstack/react-query";
-import { Clock, FileText, Globe, MessageSquareText, Video } from "lucide-react";
+import { Clock, Crown, FileText, Globe, MessageSquareText, Package, Presentation, Video } from "lucide-react";
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 import BookingModal from "../components/BookingModal";
 import { Avatar } from "../components/Brand";
-import { KIND_LABEL, rupees } from "../format";
+import SubscribeModal from "../components/SubscribeModal";
+import { CATEGORY_LABEL, KIND_LABEL, dateTime, rupees } from "../format";
 import type { ExpertPublic, Service } from "../types";
 
-const ICON = { call: Video, document: FileText, dm: MessageSquareText } as const;
-const ACTION = { call: "Book a time", document: "Buy now", dm: "Ask a question" } as const;
+const ICON = { call: Video, document: FileText, dm: MessageSquareText, webinar: Presentation, package: Package, membership: Crown } as const;
+const ACTION = { call: "Book a time", document: "Buy now", dm: "Ask a question", webinar: "Reserve a seat", package: "Buy package", membership: "Subscribe" } as const;
 
 function detail(s: Service): string {
   if (s.kind === "call") return `${s.duration_min} minutes, on video`;
   if (s.kind === "dm") return `Written reply within ${s.reply_hours} hours`;
+  if (s.kind === "webinar") {
+    const first = s.sessions[0] ? dateTime(s.sessions[0]) : "date to be announced";
+    return `${s.sessions.length > 1 ? `${s.sessions.length} sessions from ` : ""}${first} · ${s.spots_left} of ${s.capacity} seats left`;
+  }
+  if (s.kind === "package") return `${s.credits} calls of "${s.call_service_title}", valid ${s.valid_days} days`;
+  if (s.kind === "membership") return `Every document included · ${s.documents_included ?? 0} now · billed monthly`;
   return s.file_name ? "Instant download after you pay" : "File coming soon";
 }
 
@@ -43,8 +50,9 @@ export default function ExpertPage() {
         <div>
           <h1 className="text-3xl font-extrabold tracking-tight">{expert.name}</h1>
           {expert.headline && <p className="mt-1 text-lg text-slate-400">{expert.headline}</p>}
-          <p className="mt-2 inline-flex items-center gap-1.5 text-xs text-slate-500">
-            <Globe size={13} /> Available in {expert.timezone.replace("_", " ")} time
+          <p className="mt-2 inline-flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+            <span className="inline-flex items-center gap-1.5"><Globe size={13} /> Available in {expert.timezone.replace("_", " ")} time</span>
+            <span className="chip">{CATEGORY_LABEL[expert.category] ?? expert.category}</span>
           </p>
         </div>
       </header>
@@ -55,7 +63,7 @@ export default function ExpertPage() {
       <div className="space-y-3">
         {expert.services.map((s) => {
           const Icon = ICON[s.kind];
-          const unavailable = s.kind === "document" && !s.file_name;
+          const unavailable = (s.kind === "document" && !s.file_name) || (s.kind === "webinar" && s.spots_left === 0);
           return (
             <article key={s.id} className="card flex flex-col gap-4 p-5 sm:flex-row sm:items-center">
               <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent">
@@ -71,9 +79,9 @@ export default function ExpertPage() {
                 </p>
               </div>
               <div className="flex items-center justify-between gap-4 sm:flex-col sm:items-end">
-                <span className="text-xl font-bold text-slate-100">{rupees(s.price_paise)}</span>
+                <span className="text-xl font-bold text-slate-100">{rupees(s.price_paise)}{s.kind === "membership" && <span className="text-xs font-medium text-slate-400"> /mo</span>}</span>
                 <button className="btn btn-primary" onClick={() => setChosen(s)} disabled={unavailable}>
-                  {unavailable ? "Not ready" : ACTION[s.kind]}
+                  {unavailable ? (s.kind === "webinar" ? "Sold out" : "Not ready") : ACTION[s.kind]}
                 </button>
               </div>
             </article>
@@ -81,7 +89,8 @@ export default function ExpertPage() {
         })}
       </div>
 
-      {chosen && <BookingModal expert={expert} service={chosen} onClose={() => setChosen(null)} />}
+      {chosen && chosen.kind === "membership" && <SubscribeModal expert={expert} service={chosen} onClose={() => setChosen(null)} />}
+      {chosen && chosen.kind !== "membership" && <BookingModal expert={expert} service={chosen} onClose={() => setChosen(null)} />}
     </div>
   );
 }

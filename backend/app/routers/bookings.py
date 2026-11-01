@@ -11,22 +11,27 @@ from sqlalchemy.orm import Session
 
 from .. import config, payments, ratelimit, slots
 from ..db import get_db
-from ..models import Booking, Expert, Service, ServiceFile, User, utcnow
+from ..models import Booking, Expert, Service, ServiceFile, ServiceSession, User, utcnow
 from ..schemas import BookingCreated, BookingIn, BookingOut, PayIn, PaymentInfo
 from ..security import current_user
-from ..views import bookings_out
+from ..views import bookings_out, seats_taken
+from . import subscriptions
 from .experts import file_response
 
 router = APIRouter(tags=["bookings"])
 log = logging.getLogger("sessio.bookings")
 
 
-def _mark_paid(booking: Booking, payment_id: str | None = None) -> None:
+def _mark_paid(db: Session, booking: Booking, payment_id: str | None = None) -> None:
     booking.status, booking.paid_at = "paid", utcnow()
     if payment_id:
         booking.payment_id = payment_id
     if booking.kind == "call" and not booking.meeting_link:
         booking.meeting_link = f"{config.MEETING_BASE}/Sessio-{secrets.token_hex(6)}"
+    elif booking.kind == "webinar":
+        booking.meeting_link = db.get(Service, booking.service_id).meeting_link  # every date of a webinar shares one room
+    elif booking.kind == "package":
+        booking.valid_until = booking.paid_at + timedelta(days=db.get(Service, booking.service_id).valid_days or 30)
 
 
 def _own_booking(db: Session, user: User, booking_id: int) -> Booking:
@@ -43,6 +48,8 @@ def create_booking(body: BookingIn, user: User = Depends(current_user), db: Sess
         raise HTTPException(404, "This service is not available")
     if service.expert_id == user.id:
         raise HTTPException(400, "You cannot book your own service")
+    if service.kind == "membership":
+        raise HTTPException(400, "A membership is started with Subscribe, not Book")
     expert = db.get(Expert, service.expert_id)
     ratelimit.BOOKING.check(f"u{user.id}")
     slots.expire_stale_holds(db)
@@ -53,6 +60,9 @@ def create_booking(body: BookingIn, user: User = Depends(current_user), db: Sess
 
     start = end = lock = None
     note = body.note.strip()
+    credit: Booking | None = None
+    if body.package_booking_id is not None and service.kind != "call":
+        raise HTTPException(422, "A package credit pays for a 1:1 call only")
     if service.kind == "call":
         if body.slot_start is None:
             raise HTTPException(422, "Choose a time for the call")
@@ -65,6 +75,23 @@ def create_booking(body: BookingIn, user: User = Depends(current_user), db: Sess
             raise HTTPException(409, "That time is no longer available. Please pick another.")
         end = start + timedelta(minutes=service.duration_min or 30)
         lock = f"{expert.user_id}:{start:%Y%m%d%H%M}"
+        if body.package_booking_id is not None:
+            credit = _usable_package(db, user, service, body.package_booking_id, start)
+    elif service.kind == "webinar":
+        # Seats are counted while the webinar row is locked, so two people cannot take the last seat together
+        db.execute(select(Service.id).where(Service.id == service.id).with_for_update())
+        first, last = db.execute(select(func.min(ServiceSession.starts_at), func.max(ServiceSession.starts_at)).where(ServiceSession.service_id == service.id)).one()
+        if first is None or first <= utcnow():
+            raise HTTPException(409, "This webinar has already started")
+        if service.capacity and seats_taken(db, [service.id]).get(service.id, 0) >= service.capacity:
+            raise HTTPException(409, "This webinar is full")
+        if db.scalar(select(Booking.id).where(Booking.seeker_id == user.id, Booking.service_id == service.id, slots.holding(utcnow()))):
+            raise HTTPException(409, "You already have a seat in this webinar")
+        start, end = first, last + timedelta(minutes=service.duration_min or 60)
+    elif service.kind == "package":
+        call = db.get(Service, service.call_service_id) if service.call_service_id else None
+        if call is None or not call.is_active:
+            raise HTTPException(409, "The call this package is for is not offered right now")
     elif service.kind == "document":
         if db.get(ServiceFile, service.id) is None:
             raise HTTPException(409, "The file for this document has not been uploaded yet")
@@ -73,13 +100,14 @@ def create_booking(body: BookingIn, user: User = Depends(current_user), db: Sess
     elif len(note) < 10:
         raise HTTPException(422, "Write your question (at least 10 characters)")
 
+    price = 0 if credit else service.price_paise  # a credit was paid for when the package was bought
     booking = Booking(
-        seeker_id=user.id, expert_id=service.expert_id, service_id=service.id, kind=service.kind, amount_paise=service.price_paise,
-        slot_start=start, slot_end=end, slot_lock=lock, note=note,
+        seeker_id=user.id, expert_id=service.expert_id, service_id=service.id, kind=service.kind, amount_paise=price,
+        slot_start=start, slot_end=end, slot_lock=lock, note=note, package_booking_id=credit.id if credit else None,
     )
-    free = service.price_paise == 0
+    free = price == 0
     if free:
-        _mark_paid(booking)
+        _mark_paid(db, booking)
     db.add(booking)
     try:
         db.commit()
@@ -90,15 +118,32 @@ def create_booking(body: BookingIn, user: User = Depends(current_user), db: Sess
     payment = None
     if not free:
         try:
-            order = payments.create_order(service.price_paise, f"sessio_{booking.id}")
+            order = payments.create_order(price, f"sessio_{booking.id}")
         except HTTPException:
             booking.status, booking.slot_lock = "expired", None  # give the slot back at once
             db.commit()
             raise
         booking.payment_order_id = order["order_id"]
         db.commit()
-        payment = PaymentInfo(mode=order["mode"], order_id=order["order_id"], key_id=order["key_id"], amount_paise=service.price_paise)
+        payment = PaymentInfo(mode=order["mode"], order_id=order["order_id"], key_id=order["key_id"], amount_paise=price)
     return BookingCreated(booking=bookings_out(db, [booking])[0], payment=payment)
+
+
+def _usable_package(db: Session, user: User, call: Service, package_id: int, start) -> Booking:
+    """The package a call may be paid with. Locks the package row so the last credit cannot be spent twice."""
+    package = db.get(Booking, package_id)
+    if package is None or package.seeker_id != user.id or package.kind != "package" or package.status != "paid":
+        raise HTTPException(404, "Package not found")
+    db.execute(select(Booking.id).where(Booking.id == package.id).with_for_update())
+    bundle = db.get(Service, package.service_id)
+    if bundle.call_service_id != call.id:
+        raise HTTPException(422, "This package is for a different call")
+    if package.valid_until is None or package.valid_until < start:
+        raise HTTPException(409, "Your package credits run out before that time")
+    used = db.scalar(select(func.count()).select_from(Booking).where(Booking.package_booking_id == package.id, slots.holding(utcnow())))
+    if used >= (bundle.credits or 0):
+        raise HTTPException(409, "There are no credits left in this package")
+    return package
 
 
 def _settle(db: Session, booking: Booking, payment_id: str | None) -> None:
@@ -111,7 +156,7 @@ def _settle(db: Session, booking: Booking, payment_id: str | None) -> None:
         expert = db.get(Expert, booking.expert_id)
         booking.slot_lock = f"{expert.user_id}:{booking.slot_start:%Y%m%d%H%M}"
         db.flush()
-    _mark_paid(booking, payment_id)
+    _mark_paid(db, booking, payment_id)
     db.commit()
 
 
@@ -142,6 +187,9 @@ async def razorpay_webhook(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(400, "Invalid signature")
     try:
         event = json.loads(raw)
+        if str(event.get("event", "")).startswith("subscription."):
+            subscriptions.handle_event(db, event)
+            return {"ok": True}
         if event.get("event") not in {"payment.captured", "order.paid"}:
             return {"ok": True}
         payment = event["payload"]["payment"]["entity"]
@@ -174,8 +222,11 @@ def cancel_unpaid(booking_id: int, user: User = Depends(current_user), db: Sessi
     return bookings_out(db, [booking])[0]
 
 
+TABS = "^(upcoming|past|documents|messages|webinar-upcoming|webinar-past|package-active|package-past)$"
+
+
 @router.get("/api/me/bookings", response_model=list[BookingOut])
-def my_bookings(tab: str = Query("upcoming", pattern="^(upcoming|past|documents|messages)$"), user: User = Depends(current_user), db: Session = Depends(get_db)):
+def my_bookings(tab: str = Query("upcoming", pattern=TABS), user: User = Depends(current_user), db: Session = Depends(get_db)):
     now = utcnow()
     stmt = select(Booking).where(Booking.seeker_id == user.id, Booking.status == "paid")
     if tab == "upcoming":
@@ -184,9 +235,22 @@ def my_bookings(tab: str = Query("upcoming", pattern="^(upcoming|past|documents|
         stmt = stmt.where(Booking.kind == "call", Booking.slot_end < now).order_by(Booking.slot_start.desc())
     elif tab == "documents":
         stmt = stmt.where(Booking.kind == "document").order_by(Booking.paid_at.desc())
-    else:
+    elif tab == "messages":
         stmt = stmt.where(Booking.kind == "dm").order_by(Booking.paid_at.desc())
+    elif tab == "webinar-upcoming":
+        stmt = stmt.where(Booking.kind == "webinar", Booking.slot_end >= now).order_by(Booking.slot_start)
+    elif tab == "webinar-past":
+        stmt = stmt.where(Booking.kind == "webinar", Booking.slot_end < now).order_by(Booking.slot_start.desc())
+    else:
+        packages = bookings_out(db, list(db.scalars(stmt.where(Booking.kind == "package").order_by(Booking.paid_at.desc()).limit(200))))
+        live = [b for b in packages if b.valid_until and b.valid_until.replace(tzinfo=None) >= now and (b.package_used or 0) < (b.package_total or 0)]
+        return live if tab == "package-active" else [b for b in packages if b not in live]
     return bookings_out(db, list(db.scalars(stmt.limit(200))))
+
+
+@router.get("/api/me/bookings/{booking_id}", response_model=BookingOut)
+def booking_details(booking_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    return bookings_out(db, [_own_booking(db, user, booking_id)])[0]
 
 
 @router.get("/api/me/bookings/{booking_id}/download")

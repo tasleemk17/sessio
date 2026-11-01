@@ -1,10 +1,13 @@
 # Sessio
 
-A marketplace where experts sell their time and knowledge, and anyone can book it. An expert gets one shareable page with three kinds of service:
+A marketplace where experts sell their time and knowledge, and anyone can book it. An expert gets one shareable page with six kinds of service:
 
 - **1:1 video call**: the buyer picks a free time, pays, and gets a private video room.
-- **Document**: a guide or template the buyer downloads after paying.
 - **Priority DM**: the buyer sends one question and gets a written answer.
+- **Document** (products and courses): a guide or template the buyer downloads after paying.
+- **Webinar or cohort**: live sessions on set dates with a seat limit. Several dates make a cohort.
+- **Package**: several calls at one price. Each call is paid with a credit, and credits expire.
+- **Membership**: a monthly subscription (Razorpay Subscriptions) that unlocks all of the expert's documents while it is paid up.
 
 Payments run in **Razorpay test mode** (or a built-in demo mode with no account), so no real money ever moves.
 
@@ -16,10 +19,10 @@ Payments run in **Razorpay test mode** (or a built-in demo mode with no account)
 
 | For buyers | For experts |
 |---|---|
-| Search experts by name or topic | Create a page in a minute (`/e/your-name`) |
-| Pick a day and time, shown in your own time zone | Add calls, documents and priority DMs with their prices |
+| Search experts by name, topic or category | Create a page in a minute (`/e/your-name`) |
+| Pick a day and time, shown in your own time zone | Add any of the six services with their prices |
 | Pay, then get the video link, the file or the answer | Set weekly hours once; free times are worked out for you |
-| "My bookings": upcoming and past calls, documents, messages | Studio: earnings, orders, a reply box for DMs |
+| Seeker dashboard: Home, Bookings (1:1 calls, Priority DM, Products/Courses, Webinars & Cohorts, Packages), Memberships, Find People, Profile, Rewards, Find by Category | Studio: earnings (memberships included), orders, a reply box for DMs |
 
 ## How it is built
 
@@ -35,7 +38,9 @@ Decisions worth reading:
 - **Payments verified on the server.** The server creates the Razorpay order; the browser opens Checkout with only the public key; the server checks the HMAC-SHA256 signature of `order_id|payment_id` with the secret before confirming. Without keys the same flow runs in demo mode.
 - **Safe downloads.** Files are served as attachments with `application/octet-stream` and `nosniff`, only to the buyer who paid and to the seller. Uploads need a seller declaration (own the file, no one else's personal contact details).
 - **Security is built in, not added on.** Strong password hashing, brute-force lockout, forged-token rejection, content-checked uploads, CSP and other headers, strict CORS, a signed Razorpay webhook, and a production mode that refuses to start with unsafe settings. Everything is listed, with the test that proves it, in [docs/SECURITY.md](docs/SECURITY.md).
-- **Tests.** 68 tests cover accounts, slot maths, double booking, holds, documents, DMs, payment verification and the security rules. They also pass on Postgres (`TEST_DATABASE_URL`).
+- **Seats and credits cannot be oversold.** A webinar's seats are counted while its row is locked, and a package's last credit is locked the same way, so two people paying at once cannot both get it.
+- **Memberships follow the money.** Access lasts until the paid month ends, even after cancelling. Razorpay's signed webhook extends it on every monthly charge.
+- **Tests.** 91 tests cover accounts, slot maths, double booking, holds, documents, DMs, webinars, packages, memberships, rewards, payment verification and the security rules. They also pass on Postgres (`TEST_DATABASE_URL`).
 
 ## Run it
 
@@ -55,6 +60,17 @@ npm run dev
 ```
 
 Open http://localhost:5190. With no keys set, payments use the demo button (laptop only: on a public site it would let anyone book for free, so production refuses it unless you switch it on on purpose).
+
+### Demo data
+
+With the API running on a fresh local database, this fills it with three experts (every kind of service) and a buyer who has bought some of each. Local use only: the passwords are public.
+
+```bash
+cd backend
+.venv/Scripts/python scripts/seed_demo.py
+```
+
+Then sign in as `ravi@example.test` (buyer) or `asha@example.test` (expert) with the password `demo-pass-phrase-1`.
 
 ### Real Razorpay (test mode)
 
@@ -94,4 +110,7 @@ Vercel (site) + Render (API) + Neon (Postgres): see [docs/DEPLOY.md](docs/DEPLOY
 - Test-mode payments only; nothing is paid out to experts. The 10% platform fee is shown in earnings for demonstration.
 - No refunds or buyer cancellation of paid bookings yet. No email verification, password reset or two-factor sign-in (see the limits in [docs/SECURITY.md](docs/SECURITY.md)).
 - Files are stored in the database (limit 5 MB each), fine for a demo; a real product would use object storage.
+- Rewards earn points (1 per ₹10) and show a level; spending points is not built yet.
+- Memberships with real Razorpay billing are covered by tests that fake Razorpay's network calls (signature checks, webhooks, cancelling). They have not been run against Razorpay's servers, so try one in test mode before relying on it.
+- There is no migration tool: the tables are created on startup. After pulling a version that adds columns, recreate a local database (delete `backend/sessio.db`).
 - Sessio does not list or sell anyone's personal phone numbers or contact details, and uploads that do are against the seller declaration.

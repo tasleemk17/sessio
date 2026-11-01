@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import config
 from .db import Base, engine
 from .middleware import BodyLimit, SecurityHeaders
-from .routers import auth, bookings, experts
+from .routers import auth, bookings, experts, me, subscriptions
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 # httpx logs every request URL at INFO. Quiet, in case a URL ever carries a secret.
@@ -46,7 +46,7 @@ app.add_middleware(
     max_age=600,
 )
 
-for module in (auth, bookings):
+for module in (auth, bookings, subscriptions, me):
     app.include_router(module.router)
 app.include_router(experts.public)
 app.include_router(experts.manage)

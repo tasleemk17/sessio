@@ -6,8 +6,8 @@ import { api, download } from "../api";
 import { useAuth } from "../auth";
 import Modal from "../components/Modal";
 import { useToast } from "../components/Toast";
-import { KIND_LABEL, WEEKDAYS, amount, dateTime, fileSize, fromClock, rupees, toClock } from "../format";
-import type { Booking, ExpertMe, Kind, Service, Summary, Window } from "../types";
+import { CATEGORY_LABEL, KIND_LABEL, WEEKDAYS, amount, dateTime, fileSize, fromClock, fromLocalInput, rupees, toClock, toLocalInput } from "../format";
+import type { Booking, Category, ExpertMe, Kind, Service, Summary, Window } from "../types";
 
 const TABS = [
   { key: "overview", label: "Overview", icon: BarChart3 },
@@ -31,8 +31,9 @@ function Onboarding() {
   const [headline, setHeadline] = useState("");
   const [bio, setBio] = useState("");
   const [timezone, setTimezone] = useState(Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Kolkata");
+  const [category, setCategory] = useState<Category>("other");
   const create = useMutation({
-    mutationFn: () => api("/expert", { method: "POST", body: { handle, headline, bio, timezone } }),
+    mutationFn: () => api("/expert", { method: "POST", body: { handle, headline, bio, timezone, category } }),
     onSuccess: () => {
       toast("Your page is live. Add your first service.");
       refresh();
@@ -62,6 +63,12 @@ function Onboarding() {
         <div>
           <label className="label" htmlFor="bio">About you</label>
           <textarea id="bio" className="input h-28" value={bio} maxLength={2000} onChange={(e) => setBio(e.target.value)} />
+        </div>
+        <div>
+          <label className="label" htmlFor="cat">What do you help with?</label>
+          <select id="cat" className="input" value={category} onChange={(e) => setCategory(e.target.value as Category)}>
+            {Object.entries(CATEGORY_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+          </select>
         </div>
         <div>
           <label className="label" htmlFor="tz">Your time zone</label>
@@ -145,10 +152,30 @@ interface ServiceDraft {
   duration_min: number;
   reply_hours: number;
   is_active: boolean;
+  capacity: number;
+  sessions: string[]; // as the datetime-local inputs hold them: the expert's own clock
+  call_service_id: number | null;
+  credits: number;
+  valid_days: number;
+}
+
+const DEFAULT_PRICE: Record<Kind, number> = { call: 500, document: 199, dm: 99, webinar: 299, package: 1200, membership: 299 };
+const TITLE_HINT: Record<Kind, string> = {
+  call: "Resume review and career advice", document: "AWS Cloud Practitioner study plan", dm: "Ask me anything about AWS",
+  webinar: "Cloud careers for freshers, live", package: "3 mock interviews", membership: "Monthly club: every guide I write",
+};
+
+function nextSession(daysAhead: number): string {
+  const d = new Date(Date.now() + daysAhead * 86400000);
+  d.setMinutes(0, 0, 0);
+  d.setHours(19);
+  return toLocalInput(d.toISOString());
 }
 
 function ServiceForm({ existing, onClose }: { existing: Service | null; onClose: () => void }) {
   const queryClient = useQueryClient();
+  const mine = useQuery({ queryKey: ["my-services"], queryFn: () => api<Service[]>("/expert/services") });
+  const calls = (mine.data ?? []).filter((s) => s.kind === "call");
   const [draft, setDraft] = useState<ServiceDraft>({
     kind: existing?.kind ?? "call",
     title: existing?.title ?? "",
@@ -157,11 +184,27 @@ function ServiceForm({ existing, onClose }: { existing: Service | null; onClose:
     duration_min: existing?.duration_min ?? 30,
     reply_hours: existing?.reply_hours ?? 48,
     is_active: existing?.is_active ?? true,
+    capacity: existing?.capacity ?? 30,
+    sessions: existing?.sessions.length ? existing.sessions.map(toLocalInput) : [nextSession(3)],
+    call_service_id: existing?.call_service_id ?? null,
+    credits: existing?.credits ?? 3,
+    valid_days: existing?.valid_days ?? 60,
   });
-  const set = <K extends keyof ServiceDraft>(k: K, v: ServiceDraft[K]) => setDraft({ ...draft, [k]: v });
+  const set = <K extends keyof ServiceDraft>(k: K, v: ServiceDraft[K]) => setDraft((d) => ({ ...d, [k]: v }));
+  const pickKind = (kind: Kind) => setDraft((d) => ({ ...d, kind, price_rupees: DEFAULT_PRICE[kind], duration_min: kind === "webinar" ? 60 : 30 }));
+  const kind = draft.kind;
   const save = useMutation({
     mutationFn: () => {
-      const body = { ...draft, duration_min: draft.kind === "call" ? draft.duration_min : null, reply_hours: draft.kind === "dm" ? draft.reply_hours : null };
+      const body = {
+        kind, title: draft.title, description: draft.description, price_rupees: draft.price_rupees, is_active: draft.is_active,
+        duration_min: kind === "call" || kind === "webinar" ? draft.duration_min : null,
+        reply_hours: kind === "dm" ? draft.reply_hours : null,
+        capacity: kind === "webinar" ? draft.capacity : null,
+        sessions: kind === "webinar" ? draft.sessions.filter(Boolean).map(fromLocalInput) : [],
+        call_service_id: kind === "package" ? (draft.call_service_id ?? calls[0]?.id ?? null) : null,
+        credits: kind === "package" ? draft.credits : null,
+        valid_days: kind === "package" ? draft.valid_days : null,
+      };
       return existing ? api<Service>(`/expert/services/${existing.id}`, { method: "PUT", body }) : api<Service>("/expert/services", { method: "POST", body });
     },
     onSuccess: () => {
@@ -173,20 +216,24 @@ function ServiceForm({ existing, onClose }: { existing: Service | null; onClose:
     e.preventDefault();
     save.mutate();
   };
+  const minPrice = kind === "membership" ? 10 : kind === "package" ? 1 : 0;
   return (
-    <Modal title={existing ? "Edit service" : "Add a service"} onClose={onClose}>
+    <Modal title={existing ? "Edit service" : "Add a service"} onClose={onClose} wide>
       <form onSubmit={submit} className="space-y-4">
         <div>
           <label className="label" htmlFor="kind">Type</label>
-          <select id="kind" className="input" value={draft.kind} disabled={!!existing} onChange={(e) => set("kind", e.target.value as Kind)}>
+          <select id="kind" className="input" value={kind} disabled={!!existing} onChange={(e) => pickKind(e.target.value as Kind)}>
             <option value="call">1:1 video call</option>
-            <option value="document">Document (a file people download)</option>
             <option value="dm">Priority DM (a written answer)</option>
+            <option value="document">Document (a file people download)</option>
+            <option value="webinar">Webinar or cohort (live, on set dates)</option>
+            <option value="package">Package (several calls at one price)</option>
+            <option value="membership">Membership (monthly subscription)</option>
           </select>
         </div>
         <div>
           <label className="label" htmlFor="title">Title</label>
-          <input id="title" className="input" value={draft.title} onChange={(e) => set("title", e.target.value)} required minLength={3} maxLength={120} placeholder={draft.kind === "call" ? "Resume review and career advice" : draft.kind === "document" ? "AWS Cloud Practitioner study plan" : "Ask me anything about AWS"} />
+          <input id="title" className="input" value={draft.title} onChange={(e) => set("title", e.target.value)} required minLength={3} maxLength={120} placeholder={TITLE_HINT[kind]} />
         </div>
         <div>
           <label className="label" htmlFor="desc">What do they get?</label>
@@ -194,19 +241,19 @@ function ServiceForm({ existing, onClose }: { existing: Service | null; onClose:
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="label" htmlFor="price">Price (₹)</label>
-            <input id="price" type="number" min={0} max={50000} className="input" value={draft.price_rupees} onChange={(e) => set("price_rupees", Math.max(0, Math.floor(Number(e.target.value) || 0)))} />
-            <p className="mt-1 text-xs text-slate-500">0 makes it free.</p>
+            <label className="label" htmlFor="price">{kind === "membership" ? "Price per month (₹)" : "Price (₹)"}</label>
+            <input id="price" type="number" min={minPrice} max={50000} className="input" value={draft.price_rupees} onChange={(e) => set("price_rupees", Math.max(0, Math.floor(Number(e.target.value) || 0)))} />
+            <p className="mt-1 text-xs text-slate-500">{minPrice === 0 ? "0 makes it free." : `At least ₹${minPrice}.`}</p>
           </div>
-          {draft.kind === "call" && (
+          {(kind === "call" || kind === "webinar") && (
             <div>
-              <label className="label" htmlFor="dur">Length</label>
+              <label className="label" htmlFor="dur">{kind === "webinar" ? "Length of each session" : "Length"}</label>
               <select id="dur" className="input" value={draft.duration_min} onChange={(e) => set("duration_min", Number(e.target.value))}>
-                {[15, 30, 45, 60, 90].map((m) => <option key={m} value={m}>{m} minutes</option>)}
+                {(kind === "webinar" ? [30, 45, 60, 90, 120, 180] : [15, 30, 45, 60, 90]).map((m) => <option key={m} value={m}>{m} minutes</option>)}
               </select>
             </div>
           )}
-          {draft.kind === "dm" && (
+          {kind === "dm" && (
             <div>
               <label className="label" htmlFor="reply">You reply within</label>
               <select id="reply" className="input" value={draft.reply_hours} onChange={(e) => set("reply_hours", Number(e.target.value))}>
@@ -214,14 +261,57 @@ function ServiceForm({ existing, onClose }: { existing: Service | null; onClose:
               </select>
             </div>
           )}
+          {kind === "webinar" && (
+            <div>
+              <label className="label" htmlFor="seats">Seats</label>
+              <input id="seats" type="number" min={1} max={500} className="input" value={draft.capacity} onChange={(e) => set("capacity", Math.min(500, Math.max(1, Math.floor(Number(e.target.value) || 1))))} />
+            </div>
+          )}
+          {kind === "package" && (
+            <>
+              <div className="col-span-2">
+                <label className="label" htmlFor="call">Which call is it a bundle of?</label>
+                <select id="call" className="input" value={draft.call_service_id ?? calls[0]?.id ?? ""} onChange={(e) => set("call_service_id", Number(e.target.value))} disabled={!!existing}>
+                  {calls.length === 0 && <option value="">Add a 1:1 call first</option>}
+                  {calls.map((c) => <option key={c.id} value={c.id}>{c.title} ({rupees(c.price_paise)})</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="label" htmlFor="credits">Number of calls</label>
+                <input id="credits" type="number" min={2} max={20} className="input" value={draft.credits} onChange={(e) => set("credits", Math.min(20, Math.max(2, Math.floor(Number(e.target.value) || 2))))} />
+              </div>
+              <div>
+                <label className="label" htmlFor="valid">Valid for (days)</label>
+                <input id="valid" type="number" min={7} max={365} className="input" value={draft.valid_days} onChange={(e) => set("valid_days", Math.min(365, Math.max(7, Math.floor(Number(e.target.value) || 7))))} />
+              </div>
+            </>
+          )}
         </div>
+
+        {kind === "webinar" && (
+          <div>
+            <p className="label">Dates</p>
+            <p className="mb-2 text-xs text-slate-500">One date makes a webinar. Several make a cohort: buyers get every date with one ticket. Times are in your own clock.</p>
+            <div className="space-y-2">
+              {draft.sessions.map((value, i) => (
+                <div key={i} className="flex gap-2">
+                  <input type="datetime-local" aria-label={`Session ${i + 1}`} className="input" value={value} onChange={(e) => set("sessions", draft.sessions.map((x, j) => (j === i ? e.target.value : x)))} required />
+                  {draft.sessions.length > 1 && <button type="button" className="btn" aria-label="Remove date" onClick={() => set("sessions", draft.sessions.filter((_, j) => j !== i))}><Trash2 size={15} /></button>}
+                </div>
+              ))}
+            </div>
+            {draft.sessions.length < 12 && <button type="button" className="btn mt-2" onClick={() => set("sessions", [...draft.sessions, nextSession(3 + 7 * draft.sessions.length)])}><Plus size={15} /> Add a date</button>}
+          </div>
+        )}
+        {kind === "membership" && <p className="rounded-lg bg-ink-800 p-3 text-sm text-slate-400">Members get every document you sell while they are subscribed, including ones you add later. Billing is monthly through Razorpay.</p>}
+
         <label className="flex items-center gap-2 text-sm text-slate-300">
           <input type="checkbox" className="accent-indigo-600" checked={draft.is_active} onChange={(e) => set("is_active", e.target.checked)} /> Visible on my page
         </label>
         {save.error && <p role="alert" className="text-sm text-bad">{(save.error as Error).message}</p>}
         <div className="flex justify-end gap-2">
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" disabled={save.isPending}>{save.isPending && <Loader2 size={15} className="animate-spin" />} Save</button>
+          <button className="btn btn-primary" disabled={save.isPending || (kind === "package" && calls.length === 0)}>{save.isPending && <Loader2 size={15} className="animate-spin" />} Save</button>
         </div>
       </form>
     </Modal>
@@ -294,7 +384,13 @@ function Services() {
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
               <p className="flex flex-wrap items-center gap-2 font-semibold text-slate-100">{s.title} <span className="chip">{KIND_LABEL[s.kind]}</span>{!s.is_active && <span className="chip chip-miss">Hidden</span>}</p>
-              <p className="mt-1 text-sm text-slate-400">{rupees(s.price_paise)}{s.duration_min ? ` · ${s.duration_min} min` : ""}{s.reply_hours ? ` · reply in ${s.reply_hours}h` : ""}</p>
+              <p className="mt-1 text-sm text-slate-400">
+                {rupees(s.price_paise)}{s.kind === "membership" ? " / month" : ""}{s.duration_min ? ` · ${s.duration_min} min` : ""}{s.reply_hours ? ` · reply in ${s.reply_hours}h` : ""}
+                {s.kind === "webinar" ? ` · ${s.sessions.length} ${s.sessions.length === 1 ? "date" : "dates"}, ${s.spots_left} of ${s.capacity} seats left` : ""}
+                {s.kind === "package" ? ` · ${s.credits} × ${s.call_service_title}, ${s.valid_days} days` : ""}
+                {s.kind === "membership" ? ` · ${s.documents_included ?? 0} documents included` : ""}
+              </p>
+              {s.kind === "webinar" && s.sessions[0] && <p className="mt-1 text-xs text-slate-500">First: {dateTime(s.sessions[0])}</p>}
               {s.kind === "document" && (
                 <p className="mt-2 text-sm">
                   {s.file_name ? <span className="text-slate-300">{s.file_name} ({fileSize(s.file_size ?? 0)}) · <button className="text-accent hover:underline" onClick={() => download(`/expert/services/${s.id}/file`, s.file_name!).catch((e: Error) => toast(e.message, "error"))}>download</button></span> : <span className="text-warn">No file yet. People cannot buy this until you upload one.</span>}
@@ -387,6 +483,8 @@ function Order({ b }: { b: Booking }) {
         <span className="font-semibold text-slate-200">{rupees(b.amount_paise)}</span>
       </div>
       {b.kind === "call" && b.slot_start && <p className="mt-3 rounded-lg bg-ink-800 p-2.5 text-sm text-slate-200">Call on {dateTime(b.slot_start)}{b.meeting_link && <> · <a href={b.meeting_link} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">video room</a></>}{b.note && <span className="mt-1 block text-slate-400">They wrote: {b.note}</span>}</p>}
+      {b.kind === "webinar" && b.sessions.length > 0 && <p className="mt-3 rounded-lg bg-ink-800 p-2.5 text-sm text-slate-200">{b.sessions.length > 1 ? `${b.sessions.length} sessions: ` : ""}{b.sessions.map((x) => dateTime(x)).join(" · ")}</p>}
+      {b.kind === "package" && <p className="mt-3 rounded-lg bg-ink-800 p-2.5 text-sm text-slate-200">{b.package_used ?? 0} of {b.package_total} calls used</p>}
       {b.kind === "dm" && (
         <div className="mt-3 space-y-2 text-sm">
           <p className="rounded-lg bg-ink-800 p-2.5 text-slate-300">{b.note}</p>
@@ -422,8 +520,9 @@ function ProfileForm({ expert }: { expert: ExpertMe }) {
   const [headline, setHeadline] = useState(expert.headline);
   const [bio, setBio] = useState(expert.bio);
   const [timezone, setTimezone] = useState(expert.timezone);
+  const [category, setCategory] = useState<Category>(expert.category);
   const save = useMutation({
-    mutationFn: () => api<ExpertMe>("/expert/me", { method: "PUT", body: { headline, bio, timezone } }),
+    mutationFn: () => api<ExpertMe>("/expert/me", { method: "PUT", body: { headline, bio, timezone, category } }),
     onSuccess: (data) => {
       queryClient.setQueryData(["expert-me"], data);
       toast("Profile saved.");
@@ -438,6 +537,12 @@ function ProfileForm({ expert }: { expert: ExpertMe }) {
       <div>
         <label className="label" htmlFor="b">About you</label>
         <textarea id="b" className="input h-32" value={bio} maxLength={2000} onChange={(e) => setBio(e.target.value)} />
+      </div>
+      <div>
+        <label className="label" htmlFor="c">Category</label>
+        <select id="c" className="input" value={category} onChange={(e) => setCategory(e.target.value as Category)}>
+          {Object.entries(CATEGORY_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+        </select>
       </div>
       <div>
         <label className="label" htmlFor="z">Time zone</label>

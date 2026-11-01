@@ -5,7 +5,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
 
-KINDS = ("call", "document", "dm")
+KINDS = ("call", "document", "dm", "webinar", "package", "membership")
+CATEGORIES = ("career", "tech", "interview", "finance", "design", "marketing", "health", "education", "other")
 
 
 def utcnow() -> datetime:
@@ -21,6 +22,8 @@ class User(Base):
     name: Mapped[str] = mapped_column(String(80))
     password_hash: Mapped[str] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # Sessions started before this moment stop working: set when the password is changed
+    password_changed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class Expert(Base):
@@ -33,6 +36,7 @@ class Expert(Base):
     headline: Mapped[str] = mapped_column(String(120), default="")
     bio: Mapped[str] = mapped_column(Text, default="")
     timezone: Mapped[str] = mapped_column(String(60), default="Asia/Kolkata")
+    category: Mapped[str] = mapped_column(String(20), default="other", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -41,14 +45,30 @@ class Service(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     expert_id: Mapped[int] = mapped_column(ForeignKey("experts.user_id", ondelete="CASCADE"), index=True)
-    kind: Mapped[str] = mapped_column(String(10))  # call | document | dm
+    kind: Mapped[str] = mapped_column(String(10))  # call | document | dm | webinar | package | membership
     title: Mapped[str] = mapped_column(String(120))
     description: Mapped[str] = mapped_column(Text, default="")
     price_paise: Mapped[int] = mapped_column(Integer, default=0)  # money is kept in paise, never as a float
-    duration_min: Mapped[int | None] = mapped_column(Integer, nullable=True)  # calls only
+    duration_min: Mapped[int | None] = mapped_column(Integer, nullable=True)  # calls, and each webinar session
     reply_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)  # priority DMs only
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    capacity: Mapped[int | None] = mapped_column(Integer, nullable=True)  # webinars: seats
+    call_service_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # packages: which call it is a bundle of
+    credits: Mapped[int | None] = mapped_column(Integer, nullable=True)  # packages: how many calls
+    valid_days: Mapped[int | None] = mapped_column(Integer, nullable=True)  # packages: how long the credits last
+    meeting_link: Mapped[str | None] = mapped_column(String(200), nullable=True)  # webinars: one room for every session
+    razorpay_plan_id: Mapped[str | None] = mapped_column(String(60), nullable=True)  # memberships: created on first subscribe
+
+
+class ServiceSession(Base):
+    """One date of a webinar. A cohort is simply a webinar with several of them."""
+
+    __tablename__ = "service_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    service_id: Mapped[int] = mapped_column(ForeignKey("services.id", ondelete="CASCADE"), index=True)
+    starts_at: Mapped[datetime] = mapped_column(DateTime)
 
 
 class ServiceFile(Base):
@@ -103,3 +123,27 @@ class Booking(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     answered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    package_booking_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # a call paid for with a package credit
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # packages: when the credits run out
+
+
+class Subscription(Base):
+    """A membership: paid access to an expert's documents for as long as the subscription runs.
+
+    status: pending (waiting for the first payment), active, cancelled, expired.
+    Access lasts until current_period_end even after cancelling, because the buyer has already paid for it."""
+
+    __tablename__ = "subscriptions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    seeker_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    expert_id: Mapped[int] = mapped_column(ForeignKey("experts.user_id", ondelete="CASCADE"), index=True)
+    service_id: Mapped[int] = mapped_column(ForeignKey("services.id", ondelete="CASCADE"))
+    status: Mapped[str] = mapped_column(String(12), default="pending", index=True)
+    amount_paise: Mapped[int] = mapped_column(Integer)  # per month
+    payments: Mapped[int] = mapped_column(Integer, default=0)  # how many months have been paid
+    cancel_at_period_end: Mapped[bool] = mapped_column(Boolean, default=False)
+    provider_id: Mapped[str | None] = mapped_column(String(80), nullable=True, unique=True, index=True)  # Razorpay subscription id, or mock_sub_...
+    payment_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    current_period_end: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

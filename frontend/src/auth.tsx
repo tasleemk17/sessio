@@ -9,6 +9,7 @@ interface AuthState {
   loading: boolean;
   submit: (mode: "login" | "register", fields: { email: string; password: string; name?: string }) => Promise<void>;
   logout: () => void;
+  adopt: (token: string) => void;
   refresh: () => void;
 }
 
@@ -31,6 +32,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("sessio:logout", logout);
   }, [logout]);
 
+  /** Takes over a fresh token, for example after the password changed and the old sessions were signed out. */
+  const adopt = useCallback((next: string) => {
+    tokenStore.set(next);
+    setToken(next);
+  }, []);
+
   const submit = useCallback(async (mode: "login" | "register", fields: { email: string; password: string; name?: string }) => {
     const res = await api<{ token: string }>(`/auth/${mode}`, { method: "POST", body: fields });
     tokenStore.set(res.token);
@@ -44,9 +51,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loading: !!token && meQuery.isLoading,
       submit,
       logout,
+      adopt,
       refresh: () => queryClient.invalidateQueries({ queryKey: ["me"] }),
     }),
-    [token, meQuery.data, meQuery.isLoading, submit, logout, queryClient],
+    [token, meQuery.data, meQuery.isLoading, submit, logout, adopt, queryClient],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

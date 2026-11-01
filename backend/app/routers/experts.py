@@ -1,5 +1,6 @@
 import re
-from datetime import date
+import secrets
+from datetime import date, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
@@ -9,9 +10,9 @@ from sqlalchemy.orm import Session
 
 from .. import config, ratelimit, slots, uploads
 from ..db import get_db
-from ..models import Availability, Booking, Expert, Service, ServiceFile, User, utcnow
+from ..models import CATEGORIES, Availability, Booking, Expert, Service, ServiceFile, ServiceSession, Subscription, User, utcnow
 from ..schemas import (
-    AnswerIn, BookingOut, ExpertCard, ExpertIn, ExpertPublic, ExpertUpdate, ServiceIn, ServiceOut, SlotsOut, Summary, WindowIn,
+    AnswerIn, BookingOut, CategoryOut, ExpertCard, ExpertIn, ExpertPublic, ExpertUpdate, ServiceIn, ServiceOut, SlotsOut, Summary, WindowIn,
 )
 from ..security import current_expert, current_user
 from ..views import bookings_out, services_out
@@ -24,7 +25,7 @@ ALLOWED_FILES = uploads.ALLOWED
 # ---------------------------------------------------------------- public pages
 
 @public.get("", response_model=list[ExpertCard])
-def explore(q: str = Query("", max_length=80), db: Session = Depends(get_db)):
+def explore(q: str = Query("", max_length=80), category: str = Query("", max_length=20), db: Session = Depends(get_db)):
     """Experts who have at least one active service, newest first."""
     stmt = (
         select(Expert, User.name, func.min(Service.price_paise), func.count(Service.id))
@@ -40,10 +41,32 @@ def explore(q: str = Query("", max_length=80), db: Session = Depends(get_db)):
         escaped = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         like = f"%{escaped}%"
         stmt = stmt.where(or_(*(col.ilike(like, escape="\\") for col in (User.name, Expert.handle, Expert.headline, Expert.bio))))
+    if category:
+        if category not in CATEGORIES:
+            raise HTTPException(422, "Unknown category")
+        stmt = stmt.where(Expert.category == category)
     return [
-        ExpertCard(handle=e.handle, name=name, headline=e.headline, from_paise=cheapest, services=count)
+        ExpertCard(handle=e.handle, name=name, headline=e.headline, category=e.category, from_paise=cheapest, services=count)
         for e, name, cheapest, count in db.execute(stmt).all()
     ]
+
+
+CATEGORY_LABELS = {
+    "career": "Career guidance", "tech": "Tech and engineering", "interview": "Interview preparation", "finance": "Finance and money",
+    "design": "Design", "marketing": "Marketing and growth", "health": "Health and fitness", "education": "Education and study", "other": "Other",
+}
+
+
+@public.get("/categories", response_model=list[CategoryOut])
+def categories(db: Session = Depends(get_db)):
+    """Every category with the number of experts who have something on offer in it."""
+    counts = dict(
+        db.execute(
+            select(Expert.category, func.count(func.distinct(Expert.user_id)))
+            .join(Service, Service.expert_id == Expert.user_id).where(Service.is_active.is_(True)).group_by(Expert.category)
+        ).all()
+    )
+    return [CategoryOut(key=k, label=CATEGORY_LABELS[k], experts=counts.get(k, 0)) for k in CATEGORIES]
 
 
 def _expert_by_handle(db: Session, handle: str) -> tuple[Expert, User]:
@@ -57,7 +80,7 @@ def _expert_by_handle(db: Session, handle: str) -> tuple[Expert, User]:
 def expert_page(handle: str, db: Session = Depends(get_db)):
     expert, user = _expert_by_handle(db, handle)
     active = db.scalars(select(Service).where(Service.expert_id == expert.user_id, Service.is_active.is_(True)).order_by(Service.id)).all()
-    return ExpertPublic(handle=expert.handle, name=user.name, headline=expert.headline, bio=expert.bio, timezone=expert.timezone, services=services_out(db, list(active)))
+    return ExpertPublic(handle=expert.handle, name=user.name, headline=expert.headline, bio=expert.bio, timezone=expert.timezone, category=expert.category, services=services_out(db, list(active)))
 
 
 @public.get("/{handle}/slots", response_model=SlotsOut)
@@ -79,7 +102,7 @@ def become_expert(body: ExpertIn, user: User = Depends(current_user), db: Sessio
         raise HTTPException(409, "You already have an expert page")
     if not slots.valid_timezone(body.timezone):
         raise HTTPException(422, "Unknown time zone")
-    db.add(Expert(user_id=user.id, handle=body.handle, headline=body.headline.strip(), bio=body.bio.strip(), timezone=body.timezone))
+    db.add(Expert(user_id=user.id, handle=body.handle, headline=body.headline.strip(), bio=body.bio.strip(), timezone=body.timezone, category=body.category))
     try:
         db.commit()
     except IntegrityError:
@@ -90,28 +113,61 @@ def become_expert(body: ExpertIn, user: User = Depends(current_user), db: Sessio
 
 @manage.get("/me")
 def my_expert(expert: Expert = Depends(current_expert)):
-    return {"handle": expert.handle, "headline": expert.headline, "bio": expert.bio, "timezone": expert.timezone}
+    return {"handle": expert.handle, "headline": expert.headline, "bio": expert.bio, "timezone": expert.timezone, "category": expert.category}
 
 
 @manage.put("/me")
 def update_expert(body: ExpertUpdate, expert: Expert = Depends(current_expert), db: Session = Depends(get_db)):
     if not slots.valid_timezone(body.timezone):
         raise HTTPException(422, "Unknown time zone")
-    expert.headline, expert.bio, expert.timezone = body.headline.strip(), body.bio.strip(), body.timezone
+    expert.headline, expert.bio, expert.timezone, expert.category = body.headline.strip(), body.bio.strip(), body.timezone, body.category
     db.commit()
     return my_expert(expert)
 
 
-def _check_service(body: ServiceIn) -> dict:
-    if body.kind == "call" and not body.duration_min:
-        raise HTTPException(422, "A call needs a length in minutes")
-    return {
-        "kind": body.kind, "title": body.title.strip(), "description": body.description.strip(),
-        "price_paise": body.price_rupees * 100,
-        "duration_min": body.duration_min if body.kind == "call" else None,
-        "reply_hours": (body.reply_hours or 48) if body.kind == "dm" else None,
+def _utc(value):
+    """A date from the browser as naive UTC, the way every stored time is kept."""
+    return value.astimezone(timezone.utc).replace(tzinfo=None) if value.tzinfo else value
+
+
+def _clean_dates(values) -> list:
+    return sorted({_utc(d).replace(second=0, microsecond=0) for d in values})
+
+
+def _check_service(db: Session, expert: Expert, body: ServiceIn) -> tuple[dict, list]:
+    """Checks the fields that belong to this kind of service. Returns the columns to store and the webinar dates."""
+    kind = body.kind
+    fields = {
+        "kind": kind, "title": body.title.strip(), "description": body.description.strip(), "price_paise": body.price_rupees * 100,
+        "duration_min": None, "reply_hours": None, "capacity": None, "call_service_id": None, "credits": None, "valid_days": None,
         "is_active": body.is_active,
     }
+    dates: list = []
+    if kind == "call":
+        if not body.duration_min:
+            raise HTTPException(422, "A call needs a length in minutes")
+        fields["duration_min"] = body.duration_min
+    elif kind == "dm":
+        fields["reply_hours"] = body.reply_hours or 48
+    elif kind == "webinar":
+        if not body.duration_min or not body.capacity or not body.sessions:
+            raise HTTPException(422, "A webinar needs a length, a number of seats and at least one date")
+        dates = _clean_dates(body.sessions)
+        if len(dates) != len(body.sessions):
+            raise HTTPException(422, "The same date is listed twice")
+        if dates[0] <= utcnow():
+            raise HTTPException(422, "Every date must be in the future")
+        fields["duration_min"], fields["capacity"] = body.duration_min, body.capacity
+    elif kind == "package":
+        call = db.get(Service, body.call_service_id) if body.call_service_id else None
+        if call is None or call.expert_id != expert.user_id or call.kind != "call":
+            raise HTTPException(422, "Choose one of your own 1:1 calls for the package")
+        if not body.credits or not body.valid_days or body.price_rupees < 1:
+            raise HTTPException(422, "A package needs a price, a number of calls and how long they last")
+        fields["call_service_id"], fields["credits"], fields["valid_days"] = call.id, body.credits, body.valid_days
+    elif kind == "membership" and body.price_rupees < 10:
+        raise HTTPException(422, "A membership costs at least 10 rupees a month")
+    return fields, dates
 
 
 def _own_service(db: Session, expert: Expert, service_id: int) -> Service:
@@ -131,19 +187,60 @@ def add_service(body: ServiceIn, expert: Expert = Depends(current_expert), db: S
     ratelimit.WRITE.check(f"u{expert.user_id}")
     if db.scalar(select(func.count()).select_from(Service).where(Service.expert_id == expert.user_id)) >= config.MAX_SERVICES:
         raise HTTPException(409, f"You can have up to {config.MAX_SERVICES} services")
-    service = Service(expert_id=expert.user_id, **_check_service(body))
+    fields, dates = _check_service(db, expert, body)
+    service = Service(expert_id=expert.user_id, **fields)
+    if body.kind == "webinar":
+        service.meeting_link = f"{config.MEETING_BASE}/Sessio-w-{secrets.token_hex(8)}"  # one unguessable room for every date
     db.add(service)
+    db.flush()
+    db.add_all([ServiceSession(service_id=service.id, starts_at=d) for d in dates])
     db.commit()
     return services_out(db, [service])[0]
 
 
+def _has_buyers(db: Session, service: Service) -> bool:
+    paid = db.scalar(select(func.count()).select_from(Booking).where(Booking.service_id == service.id, Booking.status == "paid"))
+    members = db.scalar(select(func.count()).select_from(Subscription).where(Subscription.service_id == service.id, Subscription.status != "pending"))
+    return bool(paid or members)
+
+
+def _check_webinar_edit(db: Session, expert: Expert, service: Service, body: ServiceIn) -> tuple[dict, list | None]:
+    """Once people have booked, the dates, length and price are a promise: only the text, seats and visibility change."""
+    if not _has_buyers(db, service):
+        return _check_service(db, expert, body)
+    current = [at for (at,) in db.execute(select(ServiceSession.starts_at).where(ServiceSession.service_id == service.id).order_by(ServiceSession.starts_at))]
+    if _clean_dates(body.sessions) != current or body.price_rupees * 100 != service.price_paise or body.duration_min != service.duration_min:
+        raise HTTPException(409, "People have already booked this. The dates, length and price can no longer change.")
+    sold = db.scalar(select(func.count()).select_from(Booking).where(Booking.service_id == service.id, Booking.status == "paid"))
+    if body.capacity is None or body.capacity < sold:
+        raise HTTPException(409, f"{sold} seats are already sold")
+    fields = {
+        "kind": "webinar", "title": body.title.strip(), "description": body.description.strip(), "price_paise": service.price_paise,
+        "duration_min": service.duration_min, "reply_hours": None, "capacity": body.capacity, "call_service_id": None,
+        "credits": None, "valid_days": None, "is_active": body.is_active,
+    }
+    return fields, None
+
+
 @manage.put("/services/{service_id}", response_model=ServiceOut)
 def edit_service(service_id: int, body: ServiceIn, expert: Expert = Depends(current_expert), db: Session = Depends(get_db)):
+    ratelimit.WRITE.check(f"u{expert.user_id}")
     service = _own_service(db, expert, service_id)
     if body.kind != service.kind:
         raise HTTPException(422, "The type of a service cannot be changed. Add a new one instead.")
-    for key, value in _check_service(body).items():
+    if service.kind == "webinar":
+        fields, dates = _check_webinar_edit(db, expert, service, body)
+    else:
+        fields, dates = _check_service(db, expert, body)
+    if service.kind in ("package", "membership") and _has_buyers(db, service):
+        for locked in ("price_paise", "credits", "valid_days", "call_service_id"):
+            if fields[locked] != getattr(service, locked):
+                raise HTTPException(409, "People already bought this. Hide it and add a new one to change the terms.")
+    for key, value in fields.items():
         setattr(service, key, value)
+    if service.kind == "webinar" and dates is not None:
+        db.query(ServiceSession).filter(ServiceSession.service_id == service.id).delete()
+        db.add_all([ServiceSession(service_id=service.id, starts_at=d) for d in dates])
     db.commit()
     return services_out(db, [service])[0]
 
@@ -151,9 +248,13 @@ def edit_service(service_id: int, body: ServiceIn, expert: Expert = Depends(curr
 @manage.delete("/services/{service_id}", status_code=204)
 def remove_service(service_id: int, expert: Expert = Depends(current_expert), db: Session = Depends(get_db)):
     service = _own_service(db, expert, service_id)
-    if db.scalar(select(func.count()).select_from(Booking).where(Booking.service_id == service.id, Booking.status == "paid")):
+    if _has_buyers(db, service):
         raise HTTPException(409, "People have already bought this. Hide it instead of deleting it.")
+    if service.kind == "call" and db.scalar(select(func.count()).select_from(Service).where(Service.call_service_id == service.id)):
+        raise HTTPException(409, "A package is built on this call. Delete the package first.")
     db.query(Booking).filter(Booking.service_id == service.id).delete()
+    db.query(Subscription).filter(Subscription.service_id == service.id).delete()
+    db.query(ServiceSession).filter(ServiceSession.service_id == service.id).delete()
     db.query(ServiceFile).filter(ServiceFile.service_id == service.id).delete()
     db.delete(service)
     db.commit()
@@ -252,13 +353,18 @@ def my_sales(expert: Expert = Depends(current_expert), db: Session = Depends(get
 def summary(expert: Expert = Depends(current_expert), db: Session = Depends(get_db)):
     paid = db.scalars(select(Booking).where(Booking.expert_id == expert.user_id, Booking.status == "paid")).all()
     gross = sum(b.amount_paise for b in paid)
-    fee = gross * config.PLATFORM_FEE_PERCENT // 100
-    now = utcnow()
     by_kind: dict[str, int] = {}
     for b in paid:
         by_kind[b.kind] = by_kind.get(b.kind, 0) + 1
+    # Every month a member has paid is a sale too
+    members = db.scalars(select(Subscription).where(Subscription.expert_id == expert.user_id, Subscription.payments > 0)).all()
+    gross += sum(m.amount_paise * m.payments for m in members)
+    if members:
+        by_kind["membership"] = len(members)
+    fee = gross * config.PLATFORM_FEE_PERCENT // 100
+    now = utcnow()
     return Summary(
-        orders=len(paid), gross_paise=gross, fee_paise=fee, net_paise=gross - fee, fee_percent=config.PLATFORM_FEE_PERCENT, by_kind=by_kind,
+        orders=len(paid) + len(members), gross_paise=gross, fee_paise=fee, net_paise=gross - fee, fee_percent=config.PLATFORM_FEE_PERCENT, by_kind=by_kind,
         pending_dms=sum(1 for b in paid if b.kind == "dm" and b.answer is None),
         upcoming_calls=sum(1 for b in paid if b.kind == "call" and b.slot_end and b.slot_end >= now),
     )
