@@ -82,6 +82,8 @@ def startup_problems() -> list[str]:
         problems.append("CORS_ORIGINS must list the site's exact address, not *")
     if any(o.startswith("http://") and "localhost" not in o and "127.0.0.1" not in o for o in CORS_ORIGINS):
         problems.append("CORS_ORIGINS must use https")
+    if RAZORPAY_KEY_ID.startswith("rzp_live_") and not PRODUCTION:
+        problems.append("A LIVE Razorpay key is set outside production: it would move real money. Use rzp_test_ keys here")
     if bool(RAZORPAY_KEY_ID) != bool(RAZORPAY_KEY_SECRET):
         problems.append("Set both RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET, or neither")
     if payment_mode() == "off":

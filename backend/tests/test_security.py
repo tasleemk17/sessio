@@ -284,3 +284,9 @@ def test_browser_confirmation_needs_a_valid_signature(client, razorpay_booking):
     assert client.post(f"/api/bookings/{booking_id}/pay", headers=seeker, json=forged).status_code == 400
     genuine = {"razorpay_payment_id": "pay_1", "razorpay_signature": payments.signature_for(order_id, "pay_1", "api-secret")}
     assert client.post(f"/api/bookings/{booking_id}/pay", headers=seeker, json=genuine).status_code == 200
+
+
+def test_a_live_key_is_flagged_outside_production(monkeypatch):
+    monkeypatch.setattr(config, "RAZORPAY_KEY_ID", "rzp_live_abc123")
+    monkeypatch.setattr(config, "RAZORPAY_KEY_SECRET", "secret-value-123")
+    assert any("LIVE" in p for p in config.startup_problems())
