@@ -20,8 +20,9 @@ export default function SeekerLayout() {
   if (loading || !me) return null;
 
   return (
-    <div className="mx-auto grid max-w-6xl gap-6 px-4 py-8 md:grid-cols-[230px_1fr]">
-      <aside className="md:sticky md:top-20 md:self-start">
+    // minmax(0, 1fr): without it the wide row of menu tabs stretches the whole page past the phone screen
+    <div className="mx-auto grid max-w-6xl grid-cols-[minmax(0,1fr)] gap-6 px-4 py-8 md:grid-cols-[230px_minmax(0,1fr)]">
+      <aside className="min-w-0 md:sticky md:top-20 md:self-start">
         <div className="mb-3 hidden items-center gap-3 px-2 md:flex">
           <Avatar name={me.name} size={40} />
           <div className="min-w-0">

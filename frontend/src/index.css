@@ -131,7 +131,7 @@ body::before {
     @apply border-accent bg-accent text-on-accent shadow-[0_6px_18px_-8px_rgba(99,102,241,.7)] hover:border-accent hover:bg-accent hover:brightness-110;
   }
   .input {
-    @apply w-full rounded-lg border border-ink-600 bg-ink-950/80 px-3 py-2 text-sm text-slate-100 transition placeholder:text-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30;
+    @apply w-full rounded-lg border border-ink-600 bg-ink-950/80 px-3 py-2 text-base sm:text-sm text-slate-100 transition placeholder:text-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30;
   }
   .chip {
     @apply inline-flex items-center rounded-md border border-ink-600 px-2 py-0.5 text-xs text-slate-300;

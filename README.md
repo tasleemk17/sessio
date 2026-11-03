@@ -42,6 +42,12 @@ Decisions worth reading:
 - **Memberships follow the money.** Access lasts until the paid month ends, even after cancelling. Razorpay's signed webhook extends it on every monthly charge.
 - **Tests.** 91 tests cover accounts, slot maths, double booking, holds, documents, DMs, webinars, packages, memberships, rewards, payment verification and the security rules. They also pass on Postgres (`TEST_DATABASE_URL`).
 
+## On a phone
+
+The site is built for phones first: no sideways scrolling at 375 px wide, the dashboard menu scrolls along its own row, booking windows slide up from the bottom like a phone sheet, and inputs are 16 px so iPhones do not zoom in when you tap them. Razorpay's checkout and the Jitsi video rooms both open fine in a mobile browser.
+
+Once the site is online (https), people can install it like an app: Android Chrome shows "Install app" or "Add to Home screen", and on iPhone Safari use Share > Add to Home Screen. It opens full screen with the Sessio icon. There is no offline mode: it needs internet, as a booking site should.
+
 ## Run it
 
 You need Python 3.13 and Node 22.
