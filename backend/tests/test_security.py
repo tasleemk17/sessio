@@ -158,6 +158,7 @@ def test_search_wildcards_are_plain_characters(client):
 def test_production_refuses_unsafe_settings(monkeypatch):
     monkeypatch.setattr(config, "PRODUCTION", True)
     monkeypatch.setattr(config, "ALLOW_MOCK_PAYMENTS", False)
+    monkeypatch.setattr(config, "JWT_SECRET", config.DEV_JWT_SECRET)
     problems = " ".join(config.startup_problems())
     assert "JWT_SECRET" in problems and "payment" in problems.lower()
     monkeypatch.setattr(config, "CORS_ORIGINS", ["*"])
@@ -290,3 +291,16 @@ def test_a_live_key_is_flagged_outside_production(monkeypatch):
     monkeypatch.setattr(config, "RAZORPAY_KEY_ID", "rzp_live_abc123")
     monkeypatch.setattr(config, "RAZORPAY_KEY_SECRET", "secret-value-123")
     assert any("LIVE" in p for p in config.startup_problems())
+
+
+def test_an_empty_line_in_dotenv_counts_as_not_set():
+    """JWT_SECRET= copied from .env.example must fall back to the dev default, never become an empty signing key."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = "from app import config; print(config.JWT_SECRET == config.DEV_JWT_SECRET, config.DATABASE_URL.startswith('sqlite'), config.CORS_ORIGINS)"
+    env = {**os.environ, "JWT_SECRET": "", "DATABASE_URL": "", "CORS_ORIGINS": ""}
+    out = subprocess.run([sys.executable, "-c", code], env=env, cwd=Path(__file__).resolve().parent.parent, capture_output=True, text=True, timeout=60)
+    assert out.stdout.strip() == "True True ['http://localhost:5190']", out.stderr

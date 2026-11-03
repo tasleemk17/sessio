@@ -30,17 +30,17 @@ ENVIRONMENT = os.getenv("ENVIRONMENT", "development").strip().lower()
 PRODUCTION = ENVIRONMENT == "production"
 
 # SQLite works with zero setup. For Postgres (Neon, Supabase...) set DATABASE_URL to the URL as the host gives it.
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sessio.db")
+DATABASE_URL = os.getenv("DATABASE_URL") or "sqlite:///./sessio.db"  # "or": a line like DATABASE_URL= in .env counts as not set
 
 DEV_JWT_SECRET = "dev-only-secret-change-me-before-deploying-1234567890"
-JWT_SECRET = os.getenv("JWT_SECRET", DEV_JWT_SECRET)
+JWT_SECRET = os.getenv("JWT_SECRET") or DEV_JWT_SECRET  # an empty JWT_SECRET= line (copied from .env.example) must not become an empty key
 # OWASP's guidance for PBKDF2-HMAC-SHA256. Tests lower it to stay fast; hashes remember their own count, so the
 # number can be raised later and old passwords are upgraded the next time their owner signs in.
 PBKDF2_ITERATIONS = int(os.getenv("PBKDF2_ITERATIONS", "600000"))
 TOKEN_HOURS = int(os.getenv("TOKEN_HOURS", "24"))
 
 # Exact origins only, never "*". The site's own address is the only one that should be listed.
-CORS_ORIGINS = [o.strip().rstrip("/") for o in os.getenv("CORS_ORIGINS", "http://localhost:5190").split(",") if o.strip()]
+CORS_ORIGINS = [o.strip().rstrip("/") for o in (os.getenv("CORS_ORIGINS") or "http://localhost:5190").split(",") if o.strip()]
 
 # Razorpay test keys (rzp_test_...). With both set, payments go through Razorpay Checkout.
 RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "").strip()

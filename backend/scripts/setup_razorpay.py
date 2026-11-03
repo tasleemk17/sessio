@@ -1,4 +1,4 @@
-"""Sets up Razorpay TEST payments for a local run, without the keys ever passing through a chat or a shell history.
+r"""Sets up Razorpay TEST payments for a local run, without the keys ever passing through a chat or a shell history.
 
 Two ways to use it, from the backend folder:
 

@@ -12,6 +12,11 @@ os.environ["RAZORPAY_WEBHOOK_SECRET"] = ""
 os.environ["PBKDF2_ITERATIONS"] = "1000"  # real value is 600000; tests only need the same code path, quickly
 os.environ["RATE_LIMITS_ENABLED"] = "false"  # tests that need limits turn them on themselves
 os.environ["ENVIRONMENT"] = "development"
+# A developer's own backend/.env (real test keys, demo payments off) must never leak into the tests
+os.environ["ALLOW_MOCK_PAYMENTS"] = "true"
+os.environ["JWT_SECRET"] = "tests-only-secret-tests-only-secret-123456"
+os.environ["CORS_ORIGINS"] = "http://localhost:5190"
+os.environ["TRUST_PROXY"] = "false"
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
