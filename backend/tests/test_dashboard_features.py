@@ -387,3 +387,24 @@ def test_membership_money_counts_in_the_experts_earnings(client):
     summary = client.get("/api/expert/summary", headers=headers).json()
     assert summary["gross_paise"] == 60000 and summary["by_kind"]["membership"] == 2 and summary["orders"] == 2
     assert summary["net_paise"] == 54000  # after the 10% fee
+
+
+def test_changing_the_email_needs_the_password_and_signs_other_sessions_out(client):
+    old_email, new_email = "before@example.com", "after@example.com"
+    old = client.post("/api/auth/register", json={"name": "Mail Changer", "email": old_email, "password": PASSWORD}).json()["token"]
+    other = new_user(client)
+    time.sleep(1.1)  # tokens are timestamped to the second
+    headers = {"Authorization": f"Bearer {old}"}
+    post = lambda **b: client.post("/api/auth/email", headers=headers, json={"new_email": new_email, "current_password": PASSWORD, **b})
+    assert post(current_password="not-the-password").status_code == 400
+    assert post(new_email="not-an-email").status_code == 422
+    assert post(new_email=old_email).status_code == 422  # the same one
+    taken = client.get("/api/auth/me", headers=other).json()["email"]
+    assert post(new_email=taken).status_code == 409  # somebody else's
+    changed = post()
+    assert changed.status_code == 200
+    assert client.get("/api/auth/me", headers=headers).status_code == 401  # the old session is gone
+    fresh = {"Authorization": f"Bearer {changed.json()['token']}"}
+    assert client.get("/api/auth/me", headers=fresh).json()["email"] == new_email
+    assert client.post("/api/auth/login", json={"email": old_email, "password": PASSWORD}).status_code == 401
+    assert client.post("/api/auth/login", json={"email": new_email, "password": PASSWORD}).status_code == 200

@@ -34,6 +34,40 @@ function NameForm({ me }: { me: Me }) {
   );
 }
 
+function EmailForm({ me }: { me: Me }) {
+  const { adopt } = useAuth();
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const change = useMutation({
+    mutationFn: () => api<{ token: string }>("/auth/email", { method: "POST", body: { new_email: email, current_password: password } }),
+    onSuccess: (res) => {
+      adopt(res.token); // this device stays signed in; every other session is signed out
+      queryClient.invalidateQueries({ queryKey: ["me"] });
+      setEmail("");
+      setPassword("");
+      toast("Email changed. Use the new email to sign in from now on.");
+    },
+  });
+  return (
+    <form onSubmit={(e: FormEvent) => { e.preventDefault(); change.mutate(); }} className="card space-y-4 p-5">
+      <h2 className="font-semibold">Change email</h2>
+      <p className="text-sm text-slate-400">Now: {me.email}. You sign in with your email, so type it carefully.</p>
+      <div>
+        <label className="label" htmlFor="newemail">New email</label>
+        <input id="newemail" type="email" autoComplete="email" className="input" value={email} maxLength={254} onChange={(e) => setEmail(e.target.value)} required />
+      </div>
+      <div>
+        <label className="label" htmlFor="emailpw">Your password</label>
+        <input id="emailpw" type="password" autoComplete="current-password" className="input" value={password} onChange={(e) => setPassword(e.target.value)} required />
+      </div>
+      {change.error && <p role="alert" className="text-sm text-bad">{(change.error as Error).message}</p>}
+      <button className="btn btn-primary" disabled={change.isPending || !email || !password}>{change.isPending && <Loader2 size={15} className="animate-spin" />} Change email</button>
+    </form>
+  );
+}
+
 function PasswordForm() {
   const { adopt } = useAuth();
   const toast = useToast();
@@ -73,6 +107,7 @@ export default function Profile() {
     <div className="max-w-xl space-y-5">
       <h1 className="text-3xl font-extrabold tracking-tight">Profile</h1>
       <NameForm me={me} />
+      <EmailForm me={me} />
       <PasswordForm />
       <button className="btn" onClick={logout}>Sign out</button>
     </div>

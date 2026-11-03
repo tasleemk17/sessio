@@ -47,6 +47,11 @@ class PasswordChange(BaseModel):
         return check_password_strength(value)
 
 
+class EmailChange(BaseModel):
+    new_email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=254)
+    current_password: str = Field(max_length=128)
+
+
 class ProfileUpdate(BaseModel):
     name: str = Field(min_length=2, max_length=80)
 

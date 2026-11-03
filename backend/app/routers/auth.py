@@ -9,7 +9,7 @@ from .. import config, ratelimit
 from ..db import get_db
 from ..models import Expert, User
 from ..models import utcnow
-from ..schemas import Login, MeOut, PasswordChange, ProfileUpdate, Register, TokenOut
+from ..schemas import EmailChange, Login, MeOut, PasswordChange, ProfileUpdate, Register, TokenOut
 from ..security import create_token, current_user, hash_password, needs_rehash, spend_time_like_a_login, verify_password
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -95,3 +95,31 @@ def change_password(body: PasswordChange, user: User = Depends(current_user), db
     db.commit()
     log.info("Password changed for user %s", user.id)
     return TokenOut(token=create_token(user.id))  # this session carries on; every older one is signed out
+
+
+@router.post("/email", response_model=TokenOut)
+def change_email(body: EmailChange, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Needs the password, like a password change: a borrowed phone must not be able to take over the account.
+    Every other session is signed out, because the sign-in address is part of who can get in."""
+    key = f"u{user.id}"
+    wait = ratelimit.LOGIN_ACCOUNT.retry_after(key) if config.RATE_LIMITS_ENABLED else 0
+    if wait:
+        raise HTTPException(429, "Too many wrong passwords. Try again in a few minutes.", headers={"Retry-After": str(wait)})
+    if not verify_password(body.current_password, user.password_hash):
+        if config.RATE_LIMITS_ENABLED:
+            ratelimit.LOGIN_ACCOUNT.hit(key)
+        raise HTTPException(400, "The current password is wrong")
+    new_email = body.new_email.strip().lower()
+    if new_email == user.email:
+        raise HTTPException(422, "That is already your email")
+    if db.scalar(select(User.id).where(User.email == new_email)):
+        raise HTTPException(409, "An account with this email already exists")
+    user.email = new_email
+    user.password_changed_at = utcnow()
+    try:
+        db.commit()
+    except IntegrityError:  # someone registered it in the same instant
+        db.rollback()
+        raise HTTPException(409, "An account with this email already exists")
+    log.info("Email changed for user %s", user.id)
+    return TokenOut(token=create_token(user.id))
