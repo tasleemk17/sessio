@@ -2,7 +2,7 @@ import { motion } from "framer-motion";
 import { LogOut } from "lucide-react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../auth";
-import { usePaymentsLive } from "../usePaymentsLive";
+import { BUSINESS } from "../business";
 import { BrandMark } from "./Brand";
 import ThemeToggle from "./ThemeToggle";
 
@@ -11,7 +11,6 @@ const link = ({ isActive }: { isActive: boolean }) =>
 
 export default function Layout() {
   const { me, signedIn, logout } = useAuth();
-  const live = usePaymentsLive();
   const { pathname } = useLocation();
 
   return (
@@ -62,9 +61,15 @@ export default function Layout() {
         </motion.div>
       </main>
       <footer className="mt-16 border-t border-ink-800 py-8 text-center text-xs text-slate-500">
-        {live === false
-          ? "Sessio is a portfolio project. Payments run in test mode: no real money moves."
-          : "Payments are processed securely by Razorpay."}
+        <nav className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2" aria-label="Footer">
+          <Link to="/contact" className="hover:text-slate-300">Contact us</Link>
+          <Link to="/terms" className="hover:text-slate-300">Terms</Link>
+          <Link to="/privacy" className="hover:text-slate-300">Privacy</Link>
+          <Link to="/refund-policy" className="hover:text-slate-300">Refunds & cancellations</Link>
+        </nav>
+        <p className="mt-3">
+          © {new Date().getFullYear()} {BUSINESS.brand} · {BUSINESS.city} · Payments are processed securely by Razorpay.
+        </p>
       </footer>
     </div>
   );

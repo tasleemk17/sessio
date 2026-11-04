@@ -4,6 +4,7 @@ import ExpertPage from "./pages/ExpertPage";
 import ExpertStudio from "./pages/ExpertStudio";
 import Home from "./pages/Home";
 import Login from "./pages/Login";
+import { Contact, Privacy, RefundPolicy, Terms } from "./pages/Policies";
 import Bookings from "./pages/seeker/Bookings";
 import { Categories, FindPeople } from "./pages/seeker/Find";
 import Memberships from "./pages/seeker/Memberships";
@@ -31,6 +32,10 @@ export default function App() {
         </Route>
         <Route path="expert/:tab?" element={<ExpertStudio />} />
         <Route path="login" element={<Login />} />
+        <Route path="contact" element={<Contact />} />
+        <Route path="terms" element={<Terms />} />
+        <Route path="privacy" element={<Privacy />} />
+        <Route path="refund-policy" element={<RefundPolicy />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
