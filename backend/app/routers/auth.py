@@ -67,7 +67,8 @@ def login(body: Login, request: Request, db: Session = Depends(get_db)):
 @router.get("/me", response_model=MeOut)
 def me(user: User = Depends(current_user), db: Session = Depends(get_db)):
     expert = db.get(Expert, user.id)
-    return MeOut(id=user.id, name=user.name, email=user.email, handle=expert.handle if expert else None)
+    return MeOut(id=user.id, name=user.name, email=user.email, handle=expert.handle if expert else None,
+                 can_be_expert=config.may_become_expert(user.email))
 
 
 @router.put("/me", response_model=MeOut)

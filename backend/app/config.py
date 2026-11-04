@@ -67,6 +67,15 @@ RATE_LIMITS_ENABLED = _flag("RATE_LIMITS_ENABLED", True)
 TRUST_PROXY = _flag("TRUST_PROXY", False)
 
 
+# Who may create an expert page, as a comma-separated list of emails. Empty means anybody (the open marketplace).
+# A single-expert site sets it to that expert's email, so students only ever see the buyer side.
+EXPERT_EMAILS = {e.strip().lower() for e in os.getenv("EXPERT_EMAILS", "").split(",") if e.strip()}
+
+
+def may_become_expert(email: str) -> bool:
+    return not EXPERT_EMAILS or email.strip().lower() in EXPERT_EMAILS
+
+
 def payments_live() -> bool:
     """True when real money moves: Razorpay is on with a LIVE key. The website uses this to stop calling itself a
     test-mode demo, which would mislead a buyer whose card is really being charged."""

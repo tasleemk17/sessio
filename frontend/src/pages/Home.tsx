@@ -3,6 +3,7 @@ import { CalendarClock, FileText, MessageSquareText, Search } from "lucide-react
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
+import { useAuth } from "../auth";
 import { Avatar } from "../components/Brand";
 import { rupees } from "../format";
 import type { ExpertCard } from "../types";
@@ -23,6 +24,9 @@ const STEPS = [
 ];
 
 export default function Home() {
+  const { me } = useAuth();
+  // Only someone allowed to run an expert page (and without one yet) is invited to make one; students never are.
+  const canOpenPage = !!me?.can_be_expert && !me?.handle;
   const [search, setSearch] = useState("");
   const q = useDebounced(search);
   const experts = useQuery({ queryKey: ["experts", q], queryFn: () => api<ExpertCard[]>(`/experts?q=${encodeURIComponent(q)}`), placeholderData: (prev) => prev });
@@ -53,10 +57,16 @@ export default function Home() {
         {experts.isSuccess && experts.data.length === 0 && (
           <div className="card px-6 py-14 text-center">
             <p className="font-semibold text-slate-200">{q ? "No expert matches that yet" : "No experts have joined yet"}</p>
-            <p className="mt-1 text-sm text-slate-400">Be the first: create your page and add a service.</p>
-            <Link to="/expert" className="btn btn-primary mt-5">
-              Become an expert
-            </Link>
+            {canOpenPage ? (
+              <>
+                <p className="mt-1 text-sm text-slate-400">Be the first: create your page and add a service.</p>
+                <Link to="/expert" className="btn btn-primary mt-5">
+                  Become an expert
+                </Link>
+              </>
+            ) : (
+              <p className="mt-1 text-sm text-slate-400">Please check back soon.</p>
+            )}
           </div>
         )}
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -94,6 +104,7 @@ export default function Home() {
             </div>
           ))}
         </div>
+        {canOpenPage && (
         <div className="card mt-8 flex flex-col items-center gap-3 bg-gradient-to-br from-accent/10 to-transparent px-6 py-10 text-center">
           <MessageSquareText className="text-accent" />
           <h3 className="text-xl font-bold">Know something people ask you about?</h3>
@@ -102,6 +113,7 @@ export default function Home() {
             Create your expert page
           </Link>
         </div>
+        )}
       </section>
     </div>
   );

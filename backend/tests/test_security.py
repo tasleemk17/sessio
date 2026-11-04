@@ -314,3 +314,21 @@ def test_health_says_live_only_for_a_live_razorpay_key(client, monkeypatch):
     assert client.get("/api/health").json() == {"status": "ok", "payments": "razorpay", "live": False}
     monkeypatch.setattr(config, "RAZORPAY_KEY_ID", "rzp_live_abc")
     assert client.get("/api/health").json()["live"] is True
+
+
+def test_only_listed_emails_may_open_an_expert_page(client, monkeypatch):
+    """With EXPERT_EMAILS set, students only see the buyer side: the API refuses everyone else, not just the button."""
+    monkeypatch.setattr(config, "EXPERT_EMAILS", {"sole.expert@example.com"})
+    page = {"handle": "owner-page", "headline": "", "bio": "", "timezone": "Asia/Kolkata", "category": "other"}
+
+    student = new_user(client, prefix="student")
+    assert client.get("/api/auth/me", headers=student).json()["can_be_expert"] is False
+    refused = client.post("/api/expert", headers=student, json={**page, "handle": "student-page"})
+    assert refused.status_code == 403
+
+    made = client.post("/api/auth/register", json={"name": "Owner", "email": "Sole.Expert@Example.com", "password": PASSWORD})
+    assert made.status_code == 201, made.text
+    token = made.json()["token"]
+    owner = {"Authorization": f"Bearer {token}"}
+    assert client.get("/api/auth/me", headers=owner).json()["can_be_expert"] is True
+    assert client.post("/api/expert", headers=owner, json=page).status_code == 201

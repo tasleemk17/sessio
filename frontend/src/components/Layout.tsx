@@ -30,7 +30,7 @@ export default function Layout() {
                 My bookings
               </NavLink>
             )}
-            {signedIn && (
+            {signedIn && (me?.handle || me?.can_be_expert) && (
               <NavLink to="/expert" className={link}>
                 {me?.handle ? "Expert studio" : "Become an expert"}
               </NavLink>

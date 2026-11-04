@@ -567,7 +567,7 @@ export default function ExpertStudio() {
 
   if (!signedIn) return <Navigate to="/login?next=/expert" replace />;
   if (loading || !me) return null;
-  if (!me.handle) return <Onboarding />;
+  if (!me.handle) return me.can_be_expert ? <Onboarding /> : <Navigate to="/" replace />;
   if (!TABS.some((t) => t.key === tab)) return <Navigate to="/expert" replace />;
 
   return (

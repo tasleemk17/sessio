@@ -70,6 +70,7 @@ class MeOut(BaseModel):
     name: str
     email: str
     handle: str | None = None  # set once the person has created an expert page
+    can_be_expert: bool = False  # whether this person may create an expert page (see EXPERT_EMAILS)
 
 
 class ExpertIn(BaseModel):

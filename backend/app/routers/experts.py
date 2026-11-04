@@ -100,6 +100,8 @@ def expert_slots(handle: str, service_id: int, days: int = Query(7, ge=1, le=14)
 def become_expert(body: ExpertIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
     if db.get(Expert, user.id):
         raise HTTPException(409, "You already have an expert page")
+    if not config.may_become_expert(user.email):
+        raise HTTPException(403, "New expert pages are not open on this site")
     if not slots.valid_timezone(body.timezone):
         raise HTTPException(422, "Unknown time zone")
     db.add(Expert(user_id=user.id, handle=body.handle, headline=body.headline.strip(), bio=body.bio.strip(), timezone=body.timezone, category=body.category))

@@ -6,6 +6,8 @@ export interface Me {
   name: string;
   email: string;
   handle: string | null;
+  /** Whether this person may create an expert page. On a single-expert site only the owner can. */
+  can_be_expert?: boolean;
 }
 
 export interface Service {
