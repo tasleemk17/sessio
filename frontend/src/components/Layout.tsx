@@ -2,6 +2,7 @@ import { motion } from "framer-motion";
 import { LogOut } from "lucide-react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../auth";
+import { usePaymentsLive } from "../usePaymentsLive";
 import { BrandMark } from "./Brand";
 import ThemeToggle from "./ThemeToggle";
 
@@ -10,6 +11,7 @@ const link = ({ isActive }: { isActive: boolean }) =>
 
 export default function Layout() {
   const { me, signedIn, logout } = useAuth();
+  const live = usePaymentsLive();
   const { pathname } = useLocation();
 
   return (
@@ -60,7 +62,9 @@ export default function Layout() {
         </motion.div>
       </main>
       <footer className="mt-16 border-t border-ink-800 py-8 text-center text-xs text-slate-500">
-        Sessio is a portfolio project. Payments run in test mode: no real money moves.
+        {live === false
+          ? "Sessio is a portfolio project. Payments run in test mode: no real money moves."
+          : "Payments are processed securely by Razorpay."}
       </footer>
     </div>
   );

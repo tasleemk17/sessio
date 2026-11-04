@@ -304,3 +304,13 @@ def test_an_empty_line_in_dotenv_counts_as_not_set():
     env = {**os.environ, "JWT_SECRET": "", "DATABASE_URL": "", "CORS_ORIGINS": ""}
     out = subprocess.run([sys.executable, "-c", code], env=env, cwd=Path(__file__).resolve().parent.parent, capture_output=True, text=True, timeout=60)
     assert out.stdout.strip() == "True True ['http://localhost:5190']", out.stderr
+
+
+def test_health_says_live_only_for_a_live_razorpay_key(client, monkeypatch):
+    """The website hides its "test mode, no real money" notice only when real money really moves."""
+    assert client.get("/api/health").json()["live"] is False  # demo payments in tests
+    monkeypatch.setattr(config, "RAZORPAY_KEY_ID", "rzp_test_abc")
+    monkeypatch.setattr(config, "RAZORPAY_KEY_SECRET", "secret")
+    assert client.get("/api/health").json() == {"status": "ok", "payments": "razorpay", "live": False}
+    monkeypatch.setattr(config, "RAZORPAY_KEY_ID", "rzp_live_abc")
+    assert client.get("/api/health").json()["live"] is True

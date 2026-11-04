@@ -54,4 +54,4 @@ app.include_router(experts.manage)
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "payments": config.payment_mode()}
+    return {"status": "ok", "payments": config.payment_mode(), "live": config.payments_live()}

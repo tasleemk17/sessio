@@ -8,6 +8,7 @@ import Modal from "../components/Modal";
 import { useToast } from "../components/Toast";
 import { CATEGORY_LABEL, KIND_LABEL, WEEKDAYS, amount, dateTime, fileSize, fromClock, fromLocalInput, rupees, toClock, toLocalInput } from "../format";
 import type { Booking, Category, ExpertMe, Kind, Service, Summary, Window } from "../types";
+import { usePaymentsLive } from "../usePaymentsLive";
 
 const TABS = [
   { key: "overview", label: "Overview", icon: BarChart3 },
@@ -97,6 +98,7 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
 
 function Overview({ handle }: { handle: string }) {
   const toast = useToast();
+  const live = usePaymentsLive();
   const summary = useQuery({ queryKey: ["summary"], queryFn: () => api<Summary>("/expert/summary") });
   const services = useQuery({ queryKey: ["my-services"], queryFn: () => api<Service[]>("/expert/services") });
   const hours = useQuery({ queryKey: ["hours"], queryFn: () => api<Window[]>("/expert/availability") });
@@ -137,7 +139,7 @@ function Overview({ handle }: { handle: string }) {
           ))}
         </ul>
       </div>
-      <p className="text-xs text-slate-500">Earnings are for demonstration: payments run in test mode and nothing is paid out.</p>
+      {live === false && <p className="text-xs text-slate-500">Earnings are for demonstration: payments run in test mode and nothing is paid out.</p>}
     </div>
   );
 }

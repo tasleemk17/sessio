@@ -67,6 +67,12 @@ RATE_LIMITS_ENABLED = _flag("RATE_LIMITS_ENABLED", True)
 TRUST_PROXY = _flag("TRUST_PROXY", False)
 
 
+def payments_live() -> bool:
+    """True when real money moves: Razorpay is on with a LIVE key. The website uses this to stop calling itself a
+    test-mode demo, which would mislead a buyer whose card is really being charged."""
+    return payment_mode() == "razorpay" and RAZORPAY_KEY_ID.startswith("rzp_live_")
+
+
 def payment_mode() -> str:
     if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
         return "razorpay"
